@@ -29,12 +29,17 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    // Add zig-clap dependency
+    const yazap = b.dependency("yazap", .{});
+
     const exe = b.addExecutable(.{
         .name = "sss-zig",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    exe.root_module.addImport("yazap", yazap.module("yazap"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

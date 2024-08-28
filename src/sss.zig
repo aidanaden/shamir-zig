@@ -343,11 +343,6 @@ test "can split secret into multiple shares" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    std.debug.print("\noriginal (integers): ", .{});
-    try std.json.stringify(&secret.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
-    std.debug.print(", (string): ", .{});
-    try std.json.stringify(&secret.items, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
-
     const shares = try split(secret, 3, 2, std.testing.allocator);
     defer shares.deinit();
     assert(shares.items.len == 3);
@@ -409,10 +404,15 @@ test "can require all shares to reconstruct" {
 
     const first_share = shares.items[0];
     assert(first_share.items.len == secret.items.len + 1);
+    try std.json.stringify(&first_share.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
+
     const second_share = shares.items[1];
     assert(second_share.items.len == secret.items.len + 1);
+    try std.json.stringify(&second_share.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
+
     const third_share = shares.items[2];
     assert(third_share.items.len == secret.items.len + 1);
+    try std.json.stringify(&third_share.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
 
     const thresholds = [3]std.ArrayList(u8){ first_share, second_share, third_share };
     const reconstructed = try combine(&thresholds, std.testing.allocator);
@@ -461,3 +461,5 @@ test "can combine using any combination of shares that meets the given threshold
         s.deinit();
     }
 }
+
+test "can split secret into 255 shares" {}
