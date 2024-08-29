@@ -82,8 +82,8 @@ fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayL
         // degree is equal to t-1, where t is the threshold of required shares.
         // The coefficient at t-1 cannot equal 0.
         const coeff_idx = i + 1;
-        // const byte = try if (coeff_idx == degree) get_nonzero_rand_byte(allocator) else get_rand_byte(allocator);
-        try coefficients.append(@as(u8, @intCast(coeff_idx)));
+        const byte = try if (coeff_idx == degree) get_nonzero_rand_byte(allocator) else get_rand_byte(allocator);
+        try coefficients.append(byte);
     }
     return coefficients;
 }
@@ -220,6 +220,8 @@ const Allocator = std.mem.Allocator;
 /// @param `secret` The secret value to split into shares.
 /// @param `shares` The total number of shares to split `secret` into. Must be at least 2 and at most 255.
 /// @param `threshold` The minimum number of shares required to reconstruct `secret`. Must be at least 2 and at most 255.
+/// @param `allocator` Allocator to allocate arraylists on the heap
+///
 /// @returns A list of `shares` shares.
 pub fn split(
     secret: std.ArrayList(u8),
@@ -271,8 +273,10 @@ const CombineError = error{InvalidDuplicateShareFound};
 /// Combines `shares` to reconstruct the secret.
 ///
 /// @param `shares` A list of shares to reconstruct the secret from. Must be at least 2 and at most 255.
+/// @param `allocator` Allocator to allocate arraylists on the heap
+///
 /// @returns The reconstructed secret.
-pub fn combine(shares: []const std.ArrayList(u8), allocator: Allocator) !std.ArrayList(u8) {
+pub fn combine(shares: []std.ArrayList(u8), allocator: Allocator) !std.ArrayList(u8) {
     // Shares must be an array with length in the range [2, 256)
     assert((shares.len >= 2) and (shares.len <= 255));
     // Shares must be a Uint8Array with at least 2 bytes and all shares must have the same byte length.
@@ -351,7 +355,7 @@ test "can split secret into multiple shares" {
     assert(first_share.items.len == secret.items.len + 1);
     const second_share = shares.items[1];
 
-    const thresholds = [2]std.ArrayList(u8){ first_share, second_share };
+    var thresholds = [2]std.ArrayList(u8){ first_share, second_share };
     const reconstructed = try combine(&thresholds, std.testing.allocator);
     defer reconstructed.deinit();
 
@@ -359,7 +363,7 @@ test "can split secret into multiple shares" {
 
     std.debug.print("\nreconstructed (integers): ", .{});
     try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
-    std.debug.print(", (string): ", .{});
+    std.debug.print("\nreconstructed (string): ", .{});
     try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
 
     for (shares.items) |s| {
@@ -381,7 +385,7 @@ test "can split a 1 byte secret" {
     assert(first_share.items.len == secret.items.len + 1);
     const third_share = shares.items[2];
 
-    const thresholds = [2]std.ArrayList(u8){ first_share, third_share };
+    var thresholds = [2]std.ArrayList(u8){ first_share, third_share };
     const reconstructed = try combine(&thresholds, std.testing.allocator);
     defer reconstructed.deinit();
 
@@ -404,17 +408,14 @@ test "can require all shares to reconstruct" {
 
     const first_share = shares.items[0];
     assert(first_share.items.len == secret.items.len + 1);
-    try std.json.stringify(&first_share.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
 
     const second_share = shares.items[1];
     assert(second_share.items.len == secret.items.len + 1);
-    try std.json.stringify(&second_share.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
 
     const third_share = shares.items[2];
     assert(third_share.items.len == secret.items.len + 1);
-    try std.json.stringify(&third_share.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
 
-    const thresholds = [3]std.ArrayList(u8){ first_share, second_share, third_share };
+    var thresholds = [3]std.ArrayList(u8){ first_share, second_share, third_share };
     const reconstructed = try combine(&thresholds, std.testing.allocator);
     defer reconstructed.deinit();
 
@@ -448,7 +449,7 @@ test "can combine using any combination of shares that meets the given threshold
                     continue;
                 }
 
-                const thresholds = [3]std.ArrayList(u8){ shares.items[i], shares.items[j], shares.items[k] };
+                var thresholds = [3]std.ArrayList(u8){ shares.items[i], shares.items[j], shares.items[k] };
                 const reconstructed = try combine(&thresholds, std.testing.allocator);
 
                 assert(std.mem.eql(u8, secret.items, reconstructed.items));
@@ -462,4 +463,26 @@ test "can combine using any combination of shares that meets the given threshold
     }
 }
 
-test "can split secret into 255 shares" {}
+test "can split secret into 255 shares" {
+    var secret = std.ArrayList(u8).init(std.testing.allocator);
+    defer secret.deinit();
+    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
+    assert(secret.items.len == 6);
+
+    var shares = try split(secret, 255, 255, std.testing.allocator);
+    assert(shares.items.len == 255);
+    defer shares.deinit();
+
+    const shares_arr = try shares.toOwnedSlice();
+    defer {
+        for (shares_arr) |s| {
+            s.deinit();
+        }
+        std.testing.allocator.free(shares_arr);
+    }
+
+    const reconstructed = try combine(shares_arr, std.testing.allocator);
+    defer reconstructed.deinit();
+
+    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+}
