@@ -64,7 +64,7 @@ pub fn main() !void {
         std.mem.copyForwards(u8, secret_slice, secret);
         const secret_list = std.ArrayList(u8).fromOwnedSlice(allocator, secret_slice);
 
-        const shares = try shamir.split(secret_list, total, threshold, allocator);
+        const shares = try shamir.generate(secret_list, total, threshold, allocator);
         for (shares.items, 0..) |share, i| {
             if (i > 0) {
                 try stdout.print("\n", .{});
@@ -108,7 +108,7 @@ pub fn main() !void {
         }
 
         const share_lists_slice = try share_lists.toOwnedSlice();
-        const secret = try shamir.combine(share_lists_slice, allocator);
+        const secret = try shamir.reconstruct(share_lists_slice, allocator);
 
         try stdout.print("Regenerated secret: ", .{});
         for (secret.items) |s| {

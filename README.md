@@ -14,10 +14,42 @@ Includes a CLI app for independent/one-time using of shamir secret sharing.
 2. This library is not responsible for verifying the result of share reconstruction. Incorrect or corrupted shares will produce an incorrect value. Thus, it is the responsibility of users of this library to verify the integrity of the reconstructed secret.
 3. Secrets should ideally be uniformly distributed at random. If this is not the case, it is recommended to first encrypt the value and split the encryption key.
 
+
+## Build
+
+```sh
+zig build
+```
+
 ## Usage
 
 We can `generate` shares from a given secrent and later `reconstruct` the secret from the minimum number of shares (as configured when running `generate`).
 
+### CLI
+
+```sh
+./zig-out/bin/sss-zig generate --threshold 4 --total 10 --secret mynamejeff
+# --- output ---
+# 582119FAF8CD1A1B8B478B
+# E2C639374D22AF2F7F9A92
+# EC199A1E26F30DA8545C35
+# 18D1CD0C31AB9CF5543BBA
+# 21E445153208A7B8FDD341
+# 445DC7E47841916D1D3B5A
+# C724D4678DF493727F99D0
+# B611E915CAB0609FABEC18
+# 8B67CE0445E7CF07E780C3
+# CF8770A2BFCCFD4712EDB2
+```
+
+```sh
+./zig-out/bin/sss-zig reconstruct -s=18D1CD0C31AB9CF5543BBA,C724D4678DF493727F99D0,B611E915CAB0609FABEC18,CF8770A2BFCCFD4712EDB2
+# --- output ---
+# Regenerated secret: mynamejeff
+```
+
+
+### Code example
 ```zig
 test "can split secret into multiple shares" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);

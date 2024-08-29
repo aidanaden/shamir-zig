@@ -49,7 +49,7 @@ const EXP_TABLE = [256]u8{
     0x66, 0xb2, 0x76, 0x60, 0xda, 0xc5, 0xf3, 0xf6, 0xaa, 0xcd, 0x9a, 0xa0, 0x75, 0x54, 0x0e, 0x01,
 };
 
-pub fn get_rand_bytes(num_bytes: u8, allocator: Allocator) !std.ArrayList(u8) {
+fn get_rand_bytes(num_bytes: u8, allocator: Allocator) !std.ArrayList(u8) {
     var values = std.ArrayList(u8).init(allocator);
     for (0..num_bytes) |_| {
         try values.append(std.crypto.random.intRangeAtMost(u8, 0, 255));
@@ -115,14 +115,14 @@ fn new_coordinates(allocator: Allocator) ![255]u8 {
 
 /// Combines two numbers in GF(2^8).
 /// This can be used for both addition and subtraction.
-pub fn gadd(a: u8, b: u8) u8 {
+fn gadd(a: u8, b: u8) u8 {
     return a ^ b;
 }
 
 const DivisionError = error{InvalidZeroDenominator};
 
 /// Divides two numbers in GF(2^8).
-pub fn gdiv(a: u8, b: u8) DivisionError!u8 {
+fn gdiv(a: u8, b: u8) DivisionError!u8 {
     // This should never happen
     if (b == 0) {
         return DivisionError.InvalidZeroDenominator;
@@ -136,7 +136,7 @@ pub fn gdiv(a: u8, b: u8) DivisionError!u8 {
 }
 
 /// Multiplies two numbers in GF(2^8).
-pub fn gmult(a: u8, b: u8) u8 {
+fn gmult(a: u8, b: u8) u8 {
     const logA: u16 = LOG_TABLE[a];
     const logB: u16 = LOG_TABLE[b];
     const mod: u16 = (logA + logB) % 255;
@@ -150,7 +150,7 @@ const InterpolationError = error{SampleLengthMismatch} || DivisionError;
 ///
 /// @see `Definition` section of https://en.wikipedia.org/wiki/Lagrange_polynomial to best
 /// understand the following code
-pub fn interpolate_polynomial(x_samples: []u8, y_samples: []u8, x: u8) InterpolationError!u8 {
+fn interpolate_polynomial(x_samples: []u8, y_samples: []u8, x: u8) InterpolationError!u8 {
     if (x_samples.len != y_samples.len) {
         return InterpolationError.SampleLengthMismatch;
     }
