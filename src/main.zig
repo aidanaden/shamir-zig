@@ -18,7 +18,7 @@ pub fn main() !void {
     defer arena.deinit();
 
     const allocator = arena.allocator();
-    var app = App.init(allocator, "sss-zig", "Shamir Secret Sharing CLI tool");
+    var app = App.init(allocator, "sss", "Shamir Secret Sharing CLI tool");
     defer app.deinit();
 
     var cli = app.rootCommand();

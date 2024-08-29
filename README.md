@@ -14,6 +14,20 @@ Includes a CLI app for independent/one-time using of shamir secret sharing.
 2. This library is not responsible for verifying the result of share reconstruction. Incorrect or corrupted shares will produce an incorrect value. Thus, it is the responsibility of users of this library to verify the integrity of the reconstructed secret.
 3. Secrets should ideally be uniformly distributed at random. If this is not the case, it is recommended to first encrypt the value and split the encryption key.
 
+## Installing
+
+1. Run the following command:
+
+```
+zig fetch --save git+https://github.com/aidanaden/sss-zig
+```
+
+2. Add the following to `build.zig`:
+
+```zig
+const shamir = b.dependency("sss", .{});
+exe.root_module.addImport("shamir", yazap.module("sss"));
+```
 
 ## Build
 
@@ -23,12 +37,12 @@ zig build
 
 ## Usage
 
-We can `generate` shares from a given secrent and later `reconstruct` the secret from the minimum number of shares (as configured when running `generate`).
+We can `generate` shares from a given secret and later `reconstruct` the secret from the minimum number of shares (as configured when running `generate`).
 
 ### CLI
 
 ```sh
-./zig-out/bin/sss-zig generate --threshold 4 --total 10 --secret mynamejeff
+./zig-out/bin/sss generate --threshold 4 --total 10 --secret mynamejeff
 # --- output ---
 # 582119FAF8CD1A1B8B478B
 # E2C639374D22AF2F7F9A92
@@ -43,13 +57,13 @@ We can `generate` shares from a given secrent and later `reconstruct` the secret
 ```
 
 ```sh
-./zig-out/bin/sss-zig reconstruct -s=18D1CD0C31AB9CF5543BBA,C724D4678DF493727F99D0,B611E915CAB0609FABEC18,CF8770A2BFCCFD4712EDB2
+./zig-out/bin/sss reconstruct -s=18D1CD0C31AB9CF5543BBA,C724D4678DF493727F99D0,B611E915CAB0609FABEC18,CF8770A2BFCCFD4712EDB2
 # --- output ---
 # Regenerated secret: mynamejeff
 ```
 
-
 ### Code example
+
 ```zig
 test "can split secret into multiple shares" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);
@@ -107,7 +121,7 @@ pub fn generate(
 ) !std.ArrayList(std.ArrayList(u8))
 ```
 
-#### Reconstruc
+#### Reconstruct
 
 ```zig
 /// Reconstruct the secret from the given shares.
