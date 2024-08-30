@@ -73,7 +73,10 @@ fn get_nonzero_rand_byte(allocator: Allocator) !u8 {
     }
 }
 
-// Creates a pseudo-random set of coefficients for a polynomial.
+/// Creates a pseudo-random set of coefficients for a polynomial.
+///
+/// Returned coefficients are always `degree + 1` in length since
+/// the given secret (intercept) is stored as the first value
 fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayList(u8) {
     var coefficients = std.ArrayList(u8).init(allocator);
     // The first byte is always the intercept
@@ -88,8 +91,8 @@ fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayL
     return coefficients;
 }
 
-// Creates a set of values from [1, 256).
-// Returns a psuedo-random shuffling of the set.
+/// Creates a set of values from [1, 256).
+/// Returns a psuedo-random shuffling of the set.
 fn new_coordinates(allocator: Allocator) ![255]u8 {
     var coordinates = std.mem.zeroes([255]u8);
     for (0..255) |i| {
@@ -194,15 +197,16 @@ const EvaluationError = error{InvalidZeroXValue};
 /// Evaluates a polynomial with the given x using Horner's method.
 /// @see https://en.wikipedia.org/wiki/Horner%27s_method
 ///
-/// This is used to evaluate the secret, which is the y-intercept (x=0)
+/// This is used to evaluate the y-value for each share's randomly
+/// assigned unique x-value given
 fn evaluate(coefficients: std.ArrayList(u8), x: u8, degree: u8) EvaluationError!u8 {
     if (x == 0) {
         return EvaluationError.InvalidZeroXValue;
     }
-    // Initialise result with y-intercept
+    // Initialise result with final coefficient
+    // and calculate backwards recursively
     var result = coefficients.items[degree];
     var i = degree - 1;
-    // Run the following for all degrees (y-intercept is already included)
     while (i >= 0) : (i -= 1) {
         const coeff = coefficients.items[i];
         result = gadd(gmult(result, x), coeff);
@@ -229,7 +233,7 @@ pub fn generate(
     threshold: u8,
     allocator: Allocator,
 ) !std.ArrayList(std.ArrayList(u8)) {
-    // secret must be a non-empty Uint8Array
+    // secret must be a non-empty
     assert(secret.items.len > 0);
     // shares must be a number in the range [2, 256)
     assert((shares >= 2) and (shares <= 255));
@@ -242,8 +246,7 @@ pub fn generate(
     const secret_len = secret.items.len;
     const x_coordinates = try new_coordinates(allocator);
 
-    // Use randomly generated x-coordinate
-    // as an id for each share (must be unique)
+    // Generate unique x-value for each share
     for (0..shares) |k| {
         var share = std.ArrayList(u8).init(allocator);
         for (0..secret_len + 1) |_| {
@@ -253,6 +256,14 @@ pub fn generate(
         try result.insert(k, share);
     }
 
+    // Generate y-values with the following
+    //
+    // 1. Generate curve via coefficients of length `degree` for secret byte i
+    // 2. Calculate y-value of each share's x-value within generated curve
+    // 3. Store y-value for secret byte i in share[i]
+    //
+    // This results in share's containing [y1, y2, y3, ... yN, x]
+    // where N is total number of bytes in secret
     const degree = threshold - 1;
     for (0..secret_len) |i| {
         const secret_byte = secret.items[i];
