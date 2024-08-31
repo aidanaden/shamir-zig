@@ -130,19 +130,19 @@ fn gdiv(a: u8, b: u8) DivisionError!u8 {
     if (b == 0) {
         return DivisionError.InvalidZeroDenominator;
     }
-    const logA: u16 = LOG_TABLE[a];
-    const logB: u16 = LOG_TABLE[b];
-    const diff: u16 = (logA + 255 - logB);
-    const mod: u16 = diff % 255;
+    const logA: u32 = LOG_TABLE[a];
+    const logB: u32 = LOG_TABLE[b];
+    const diff: u32 = (logA + 255 - logB);
+    const mod: u32 = diff % 255;
     const result = EXP_TABLE[mod];
     return if (a == 0) 0 else result;
 }
 
 /// Multiplies two numbers in GF(2^8).
 fn gmult(a: u8, b: u8) u8 {
-    const logA: u16 = LOG_TABLE[a];
-    const logB: u16 = LOG_TABLE[b];
-    const mod: u16 = (logA + logB) % 255;
+    const logA: u32 = LOG_TABLE[a];
+    const logB: u32 = LOG_TABLE[b];
+    const mod: u32 = (logA + logB) % 255;
     const result = EXP_TABLE[mod];
     return if (a == 0 or b == 0) 0 else result;
 }
