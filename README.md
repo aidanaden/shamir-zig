@@ -19,14 +19,14 @@ Includes a CLI app for independent/one-time using of shamir secret sharing.
 1. Run the following command:
 
 ```
-zig fetch --save git+https://github.com/aidanaden/sss-zig
+zig fetch --save git+https://github.com/aidanaden/shamir-zig
 ```
 
 2. Add the following to `build.zig`:
 
 ```zig
-const shamir = b.dependency("sss", .{});
-exe.root_module.addImport("shamir", yazap.module("sss"));
+const shamir = b.dependency("shamir-zig", .{});
+exe.root_module.addImport("shamir", yazap.module("shamir"));
 ```
 
 ## Build
