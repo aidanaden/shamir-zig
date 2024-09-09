@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 /// The Polynomial used is: x⁸ + x⁴ + x³ + x + 1
@@ -217,7 +218,50 @@ fn evaluate(coefficients: std.ArrayList(u8), x: u8, degree: u8) EvaluationError!
     return result;
 }
 
-const Allocator = std.mem.Allocator;
+const Share = struct {
+    x: u8,
+    y: std.ArrayList(u8),
+
+    const Self = @This();
+
+    fn init(x: u8, allocator: Allocator) Share {
+        return Share{ .x = x, .y = std.ArrayList(u8).init(allocator) };
+    }
+    fn deinit(self: *const Self) void {
+        self.y.deinit();
+    }
+};
+
+const Polynomial = struct {
+    coefficients: std.ArrayList(u8),
+
+    const Self = @This();
+
+    fn init(allocator: Allocator) Self {
+        return Polynomial{ .coefficients = std.ArrayList(u8).init(allocator) };
+    }
+    fn deinit(self: *Self) void {
+        self.coefficients.deinit();
+    }
+};
+
+const GeneratedShares = struct {
+    shares: std.ArrayList(Share),
+    polynomials: std.ArrayList(Polynomial),
+
+    const Self = @This();
+
+    fn deinit(self: *const Self) void {
+        for (0..self.shares.items.len) |i| {
+            self.shares.items[i].deinit();
+        }
+        for (0..self.polynomials.items.len) |i| {
+            self.polynomials.items[i].deinit();
+        }
+        self.shares.deinit();
+        self.polynomials.deinit();
+    }
+};
 
 /// Generate `shares` number of shares from given `secret` value, requiring `threshold` of them to reconstruct `secret`.
 ///
@@ -229,31 +273,29 @@ const Allocator = std.mem.Allocator;
 /// @returns A list of `shares` shares.
 pub fn generate(
     secret: std.ArrayList(u8),
-    shares: u8,
+    num_shares: u8,
     threshold: u8,
     allocator: Allocator,
-) !std.ArrayList(std.ArrayList(u8)) {
+) !GeneratedShares {
     // secret must be a non-empty
     assert(secret.items.len > 0);
-    // shares must be a number in the range [2, 256)
-    assert((shares >= 2) and (shares <= 255));
+    // num_shares must be a number in the range [2, 256)
+    assert((num_shares >= 2) and (num_shares <= 255));
     // threshold must be a number in the range [2, 256)
     assert((threshold >= 2) and (threshold <= 255));
     // total number of shares must be greater than or equal to the required threshold
-    assert(shares >= threshold);
+    assert(num_shares >= threshold);
 
-    var result = try std.ArrayList(std.ArrayList(u8)).initCapacity(allocator, shares);
+    var shares = try std.ArrayList(Share).initCapacity(allocator, num_shares);
     const secret_len = secret.items.len;
     const x_coordinates = try new_coordinates(allocator);
 
     // Generate unique x-value for each share
-    for (0..shares) |k| {
-        var share = std.ArrayList(u8).init(allocator);
-        for (0..secret_len + 1) |_| {
-            try share.append(0);
-        }
-        share.items[secret_len] = x_coordinates[k];
-        try result.insert(k, share);
+    for (0..num_shares) |k| {
+        // var share = std.ArrayList(u8).init(allocator);
+        const x_k = x_coordinates[k];
+        const share = Share.init(x_k, allocator);
+        try shares.append(share);
     }
 
     // Generate y-values with the following
@@ -265,18 +307,21 @@ pub fn generate(
     // This results in share's containing [y1, y2, y3, ... yN, x]
     // where N is total number of bytes in secret
     const degree = threshold - 1;
+    var polynomials = std.ArrayList(Polynomial).init(allocator);
     for (0..secret_len) |i| {
         const secret_byte = secret.items[i];
         const coeffs = try new_coefficients(secret_byte, degree, allocator);
+        const polynomial = Polynomial{ .coefficients = coeffs };
 
-        for (0..shares) |k| {
+        for (0..num_shares) |k| {
             const x = x_coordinates[k];
             const y = try evaluate(coeffs, x, degree);
-            result.items[k].items[i] = y;
+            try shares.items[k].y.append(y);
         }
-        coeffs.deinit();
+        try polynomials.append(polynomial);
     }
-    return result;
+
+    return GeneratedShares{ .shares = shares, .polynomials = polynomials };
 }
 
 const CombineError = error{InvalidDuplicateShareFound};
@@ -287,22 +332,17 @@ const CombineError = error{InvalidDuplicateShareFound};
 /// @param `allocator` Allocator to allocate arraylists on the heap
 ///
 /// @returns The reconstructed secret.
-pub fn reconstruct(shares: []std.ArrayList(u8), allocator: Allocator) !std.ArrayList(u8) {
+pub fn reconstruct(shares: []Share, allocator: Allocator) !std.ArrayList(u8) {
     // Shares must be an array with length in the range [2, 256)
     assert((shares.len >= 2) and (shares.len <= 255));
     // Shares must be a Uint8Array with at least 2 bytes and all shares must have the same byte length.
     const first_share = shares[0];
     for (shares) |share| {
-        assert((share.items.len >= 2) and (share.items.len == first_share.items.len));
+        assert((share.y.items.len >= 1) and (share.y.items.len == first_share.y.items.len));
     }
 
     const num_shares = shares.len;
-    const share_len = shares[0].items.len;
-    // This will be our reconstructed secret
-    // Note: secret is 1 byte smaller than a share
-    // since share includes an extra x-value (which
-    // is also used as identifier tag)
-    const secret_len = share_len - 1;
+    const secret_len = shares[0].y.items.len;
     var secret = std.ArrayList(u8).init(allocator);
     for (secret_len) |_| {
         try secret.append(0);
@@ -320,7 +360,7 @@ pub fn reconstruct(shares: []std.ArrayList(u8), allocator: Allocator) !std.Array
     defer share_ids.deinit();
     for (0..num_shares) |i| {
         const share = shares[i];
-        const share_id = share.items[share_len - 1];
+        const share_id = share.x;
 
         const is_duplicate = for (share_ids.items) |eid| {
             if (eid == share_id) {
@@ -339,7 +379,7 @@ pub fn reconstruct(shares: []std.ArrayList(u8), allocator: Allocator) !std.Array
     for (0..secret_len) |i| {
         // Set y-value for each share
         for (0..num_shares) |j| {
-            const y = shares[j].items[i];
+            const y = shares[j].y.items[i];
             y_samples.items[j] = y;
         }
 
@@ -358,20 +398,16 @@ test "can split secret into multiple shares" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const shares = try generate(secret, 3, 2, std.testing.allocator);
-    defer {
-        for (shares.items) |s| {
-            s.deinit();
-        }
-        shares.deinit();
-    }
+    const generated = try generate(secret, 3, 2, std.testing.allocator);
+    defer generated.deinit();
+    const shares = generated.shares;
     assert(shares.items.len == 3);
 
     const first_share = shares.items[0];
-    assert(first_share.items.len == secret.items.len + 1);
+    assert(first_share.y.items.len == secret.items.len);
     const second_share = shares.items[1];
 
-    var thresholds = [2]std.ArrayList(u8){ first_share, second_share };
+    var thresholds = [2]Share{ first_share, second_share };
     const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
     defer reconstructed.deinit();
 
@@ -389,23 +425,20 @@ test "can split a 1 byte secret" {
     try secret.appendSlice(&[_]u8{0x33});
     assert(secret.items.len == 1);
 
-    const shares = try generate(secret, 3, 2, std.testing.allocator);
-    defer shares.deinit();
+    const generated = try generate(secret, 3, 2, std.testing.allocator);
+    defer generated.deinit();
+    const shares = generated.shares;
     assert(shares.items.len == 3);
 
     const first_share = shares.items[0];
-    assert(first_share.items.len == secret.items.len + 1);
+    assert(first_share.y.items.len == secret.items.len);
     const third_share = shares.items[2];
 
-    var thresholds = [2]std.ArrayList(u8){ first_share, third_share };
+    var thresholds = [2]Share{ first_share, third_share };
     const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
     defer reconstructed.deinit();
 
     assert(std.mem.eql(u8, secret.items, reconstructed.items));
-
-    for (shares.items) |s| {
-        s.deinit();
-    }
 }
 
 test "can require all shares to reconstruct" {
@@ -414,28 +447,25 @@ test "can require all shares to reconstruct" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const shares = try generate(secret, 3, 3, std.testing.allocator);
-    defer shares.deinit();
+    const generated = try generate(secret, 3, 3, std.testing.allocator);
+    defer generated.deinit();
+    const shares = generated.shares;
     assert(shares.items.len == 3);
 
     const first_share = shares.items[0];
-    assert(first_share.items.len == secret.items.len + 1);
+    assert(first_share.y.items.len == secret.items.len);
 
     const second_share = shares.items[1];
-    assert(second_share.items.len == secret.items.len + 1);
+    assert(second_share.y.items.len == secret.items.len);
 
     const third_share = shares.items[2];
-    assert(third_share.items.len == secret.items.len + 1);
+    assert(third_share.y.items.len == secret.items.len);
 
-    var thresholds = [3]std.ArrayList(u8){ first_share, second_share, third_share };
+    var thresholds = [3]Share{ first_share, second_share, third_share };
     const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
     defer reconstructed.deinit();
 
     assert(std.mem.eql(u8, secret.items, reconstructed.items));
-
-    for (shares.items) |s| {
-        s.deinit();
-    }
 }
 
 test "can combine using any combination of shares that meets the given threshold" {
@@ -444,12 +474,13 @@ test "can combine using any combination of shares that meets the given threshold
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const shares = try generate(secret, 5, 3, std.testing.allocator);
-    defer shares.deinit();
+    const generated = try generate(secret, 5, 3, std.testing.allocator);
+    defer generated.deinit();
+    const shares = generated.shares;
     assert(shares.items.len == 5);
 
     for (shares.items, 0..) |s, i| {
-        assert(s.items.len == secret.items.len + 1);
+        assert(s.y.items.len == secret.items.len);
 
         for (0..5) |j| {
             if (j == i) {
@@ -461,17 +492,13 @@ test "can combine using any combination of shares that meets the given threshold
                     continue;
                 }
 
-                var thresholds = [3]std.ArrayList(u8){ shares.items[i], shares.items[j], shares.items[k] };
+                var thresholds = [3]Share{ shares.items[i], shares.items[j], shares.items[k] };
                 const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
 
                 assert(std.mem.eql(u8, secret.items, reconstructed.items));
                 reconstructed.deinit();
             }
         }
-    }
-
-    for (shares.items) |s| {
-        s.deinit();
     }
 }
 
@@ -481,17 +508,11 @@ test "can split secret into 255 shares" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    var shares = try generate(secret, 255, 255, std.testing.allocator);
+    const generated = try generate(secret, 255, 255, std.testing.allocator);
+    defer generated.deinit();
+    var shares = generated.shares;
     assert(shares.items.len == 255);
-    defer shares.deinit();
-
     const shares_arr = try shares.toOwnedSlice();
-    defer {
-        for (shares_arr) |s| {
-            s.deinit();
-        }
-        std.testing.allocator.free(shares_arr);
-    }
 
     const reconstructed = try reconstruct(shares_arr, std.testing.allocator);
     defer reconstructed.deinit();
