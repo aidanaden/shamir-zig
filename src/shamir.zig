@@ -1,9 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Ristretto255 = std.crypto.ecc.Ristretto255;
 const assert = std.debug.assert;
-
+const Ristretto255 = std.crypto.ecc.Ristretto255;
+const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const CompressedScalar = std.crypto.ecc.Ristretto255.scalar.CompressedScalar;
+
+pub const one: CompressedScalar = [_]u8{0} ** 31 ++ [_]u8{1};
 
 /// Creates a pseudo-random set of coefficients for a polynomial.
 ///
@@ -13,18 +15,15 @@ fn new_coefficients(intercept: CompressedScalar, degree: u8, allocator: Allocato
     var coefficients = std.ArrayList(CompressedScalar).init(allocator);
     // The first byte is always the intercept
     try coefficients.append(intercept);
+    // degree is equal to t-1, where t is the
+    // threshold of required shares.
     for (0..degree) |_| {
-        // degree is equal to t-1, where t is the threshold of required shares.
-        // The coefficient at t-1 cannot equal 0.
-        // const coeff_idx = i + 1;
         const rand_scalar = Ristretto255.scalar.random();
         try coefficients.append(rand_scalar);
     }
     return coefficients;
 }
 
-/// Creates a set of values from [1, 256).
-/// Returns a psuedo-random shuffling of the set.
 fn new_coordinates() ![255]CompressedScalar {
     var coordinates: [255]CompressedScalar = undefined;
     for (0..255) |i| {
@@ -45,16 +44,12 @@ fn interpolate_polynomial(x_samples: []CompressedScalar, y_samples: []Compressed
     }
 
     const limit = x_samples.len;
-
     var result: CompressedScalar = Ristretto255.scalar.zero;
 
     // Calculate basis polynomials for jth share
     for (0..limit) |j| {
-        var num = Ristretto255.scalar.zero;
-        num[31] = 1;
-        var denom: CompressedScalar = Ristretto255.scalar.zero;
-        denom[31] = 1;
-
+        var num = one;
+        var denom = one;
         for (0..limit) |k| {
             // Basis polynomial is calculated
             // with x-values of all other k-1 shares,
@@ -66,18 +61,8 @@ fn interpolate_polynomial(x_samples: []CompressedScalar, y_samples: []Compressed
             // and subtraction are equivalent in GF
             num = Ristretto255.scalar.mul(num, x_samples[k]);
             denom = Ristretto255.scalar.mul(denom, Ristretto255.scalar.sub(x_samples[k], x_samples[j]));
-            // const num = gadd(x, x_samples[k]);
             // Corresponds to `x(j) - x(k)` but addition
             // and subtraction are equivalent in GF
-            // const denom = Ristretto255.scalar.sub(x_samples[j], x_samples[k]);
-            // const denom = gadd(x_samples[j], x_samples[k]);
-
-            // const denom_expanded = Ristretto255.scalar.Scalar.fromBytes(denom);
-            // const denom_inverted = Ristretto255.scalar.Scalar.invert(denom_expanded).toBytes();
-            // const term = Ristretto255.scalar.mul(num, denom_inverted);
-            // // const term = try gdiv(num, denom);
-            // basis = Ristretto255.scalar.mul(basis, term);
-            // // basis = gmult(basis, term);
         }
 
         std.debug.assert(!Ristretto255.scalar.Scalar.fromBytes(denom).isZero());
@@ -85,11 +70,6 @@ fn interpolate_polynomial(x_samples: []CompressedScalar, y_samples: []Compressed
         const denom_expanded = Ristretto255.scalar.Scalar.fromBytes(denom);
         const denom_inverted = Ristretto255.scalar.Scalar.invert(denom_expanded).toBytes();
         result = Ristretto255.scalar.add(result, Ristretto255.scalar.mul(y_samples[j], Ristretto255.scalar.mul(num, denom_inverted)));
-
-        // const group = Ristretto255.scalar.mul(y_samples[j], basis);
-        // const group = gmult(y_samples[j], basis);
-        // result = Ristretto255.scalar.add(result, group);
-        // result = gadd(result, group);
     }
 
     return result;
@@ -113,7 +93,6 @@ fn evaluate(coefficients: std.ArrayList(CompressedScalar), x: CompressedScalar, 
     while (i >= 0) : (i -= 1) {
         const coeff = coefficients.items[i];
         result = Ristretto255.scalar.add(Ristretto255.scalar.mul(result, x), coeff);
-        // result = gadd(gmult(result, x), coeff);
         if (i == 0) {
             break;
         }
@@ -134,22 +113,19 @@ const Polynomial = struct {
     fn init(allocator: Allocator) Self {
         return Polynomial{ .coefficients = std.ArrayList(u8).init(allocator) };
     }
-    fn deinit(self: *Self) void {
+    fn deinit(self: *const Self) void {
         self.coefficients.deinit();
     }
 };
 
 const GeneratedShares = struct {
     shares: std.ArrayList(Share),
-    polynomials: std.ArrayList(Polynomial),
+    polynomial: Polynomial,
 
     const Self = @This();
 
     fn deinit(self: *const Self) void {
-        for (0..self.polynomials.items.len) |i| {
-            self.polynomials.items[i].deinit();
-        }
-        self.polynomials.deinit();
+        self.polynomial.deinit();
         self.shares.deinit();
     }
 };
@@ -180,35 +156,23 @@ pub fn generate(
     var shares = try std.ArrayList(Share).initCapacity(allocator, num_shares);
     const x_coordinates = try new_coordinates();
 
-    // Generate unique x-value for each share
-    for (0..num_shares) |k| {
-        // var share = std.ArrayList(u8).init(allocator);
-        const x_k = x_coordinates[k];
-        const share = Share{ .x = x_k, .y = Ristretto255.scalar.zero };
-        try shares.append(share);
-    }
-
     // Generate y-values with the following
     //
-    // 1. Generate curve via coefficients of length `degree` for secret byte i
+    // 1. Generate curve via coefficients of length `degree`
     // 2. Calculate y-value of each share's x-value within generated curve
-    // 3. Store y-value for secret byte i in share[i]
-    //
-    // This results in share's containing [y1, y2, y3, ... yN, x]
-    // where N is total number of bytes in secret
+    // 3. Store y-value
     const degree = threshold - 1;
-    var polynomials = std.ArrayList(Polynomial).init(allocator);
     const coeffs = try new_coefficients(secret, degree, allocator);
     const polynomial = Polynomial{ .coefficients = coeffs };
 
     for (0..num_shares) |k| {
         const x = x_coordinates[k];
         const y = try evaluate(coeffs, x, degree);
-        shares.items[k].y = y;
+        const share = Share{ .x = x, .y = y };
+        try shares.append(share);
     }
-    try polynomials.append(polynomial);
 
-    return GeneratedShares{ .shares = shares, .polynomials = polynomials };
+    return GeneratedShares{ .shares = shares, .polynomial = polynomial };
 }
 
 const CombineError = error{InvalidDuplicateShareFound};
@@ -220,9 +184,8 @@ const CombineError = error{InvalidDuplicateShareFound};
 ///
 /// @returns The reconstructed secret.
 pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
-    // Shares must be an array with length in the range [2, 256)
+    // Shares must be an array with length in the range [2, 255)
     assert((shares.len >= 2) and (shares.len <= 255));
-    // Shares must be a Uint8Array with at least 2 bytes and all shares must have the same byte length.
 
     const num_shares = shares.len;
 
@@ -234,13 +197,13 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
         try y_samples.append(Ristretto255.scalar.zero);
     }
 
-    var share_ids = std.ArrayList(CompressedScalar).init(allocator);
-    defer share_ids.deinit();
     for (0..num_shares) |i| {
         const share = shares[i];
         const share_id = share.x;
 
-        const is_duplicate = for (share_ids.items) |eid| {
+        // Filter for duplicate x-values, all
+        // x-values are expected to be unique
+        const is_duplicate = for (x_samples.items) |eid| {
             if (Ristretto255.scalar.Scalar.isZero(Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(eid, share_id)))) {
                 break true;
             }
@@ -249,7 +212,6 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
             return CombineError.InvalidDuplicateShareFound;
         }
 
-        try share_ids.append(share_id);
         try x_samples.append(share_id);
     }
 
@@ -262,18 +224,21 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
     // Interpolate the polynomial and compute the value
     // at y-intersect aka when x = 0 (secret)
     const secret = try interpolate_polynomial(x_samples.items, y_samples.items);
-
     return secret;
 }
 
+const expect = std.testing.expect;
+
 test "can split secret into multiple shares" {
-    const raw_secret: CompressedScalar = Ristretto255.scalar.random();
-    const secret = raw_secret;
+    const word_secret = "secret";
+    var secret: [32]u8 = undefined;
+    Keccak256.hash(word_secret, &secret, .{});
+    secret = Ristretto255.scalar.reduce(secret);
 
     const generated = try generate(secret, 3, 2, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
-    assert(shares.items.len == 3);
+    try expect(shares.items.len == 3);
 
     const first_share = shares.items[0];
     const second_share = shares.items[1];
@@ -282,23 +247,19 @@ test "can split secret into multiple shares" {
     const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
-    std.debug.print("\nsecret: {any}, reconstructed: {any}, isEqual: {any}", .{ secret, reconstructed, isEqual });
-    assert(isEqual);
-
-    std.debug.print("\nreconstructed (integers): ", .{});
-    try std.json.stringify(&reconstructed, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
-    std.debug.print("\nreconstructed (string): ", .{});
-    try std.json.stringify(&reconstructed, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
+    try expect(isEqual);
 }
 
 test "can require all shares to reconstruct" {
-    const raw_secret: CompressedScalar = Ristretto255.scalar.random();
-    const secret = raw_secret;
+    const word_secret = "secret";
+    var secret: [32]u8 = undefined;
+    Keccak256.hash(word_secret, &secret, .{});
+    secret = Ristretto255.scalar.reduce(secret);
 
     const generated = try generate(secret, 3, 2, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
-    assert(shares.items.len == 3);
+    try expect(shares.items.len == 3);
 
     const first_share = shares.items[0];
     const second_share = shares.items[1];
@@ -308,23 +269,19 @@ test "can require all shares to reconstruct" {
     const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
-    std.debug.print("\nsecret: {any}, reconstructed: {any}, isEqual: {any}", .{ secret, reconstructed, isEqual });
-    assert(isEqual);
-
-    std.debug.print("\nreconstructed (integers): ", .{});
-    try std.json.stringify(&reconstructed, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
-    std.debug.print("\nreconstructed (string): ", .{});
-    try std.json.stringify(&reconstructed, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
+    try expect(isEqual);
 }
 
 test "can combine using any combination of shares that meets the given threshold" {
-    const raw_secret: CompressedScalar = Ristretto255.scalar.random();
-    const secret = raw_secret;
+    const word_secret = "secret";
+    var secret: [32]u8 = undefined;
+    Keccak256.hash(word_secret, &secret, .{});
+    secret = Ristretto255.scalar.reduce(secret);
 
     const generated = try generate(secret, 5, 3, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
-    assert(shares.items.len == 5);
+    try expect(shares.items.len == 5);
 
     for (shares.items, 0..) |_, i| {
         for (0..5) |j| {
@@ -338,29 +295,25 @@ test "can combine using any combination of shares that meets the given threshold
                 var thresholds = [3]Share{ shares.items[i], shares.items[j], shares.items[k] };
                 const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
                 const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
-                assert(isEqual);
+                try expect(isEqual);
             }
         }
     }
 }
 
 test "can split secret into 255 shares" {
-    const raw_secret: CompressedScalar = Ristretto255.scalar.random();
-    const secret = raw_secret;
+    const word_secret = "secret";
+    var secret: [32]u8 = undefined;
+    Keccak256.hash(word_secret, &secret, .{});
+    secret = Ristretto255.scalar.reduce(secret);
 
     const generated = try generate(secret, 255, 255, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
-    assert(shares.items.len == 255);
+    try expect(shares.items.len == 255);
 
     const reconstructed = try reconstruct(shares.items, std.testing.allocator);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
-    std.debug.print("\nsecret: {any}, reconstructed: {any}, isEqual: {any}", .{ secret, reconstructed, isEqual });
-    assert(isEqual);
-
-    std.debug.print("\nreconstructed (integers): ", .{});
-    try std.json.stringify(&reconstructed, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
-    std.debug.print("\nreconstructed (string): ", .{});
-    try std.json.stringify(&reconstructed, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
+    try expect(isEqual);
 }

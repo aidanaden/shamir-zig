@@ -19,6 +19,9 @@ pub fn build(b: *std.Build) void {
     _ = b.addModule("shamir", .{
         .root_source_file = b.path("src/shamir.zig"),
     });
+    _ = b.addModule("shamir_gf", .{
+        .root_source_file = b.path("src/shamir_gf.zig"),
+    });
 
     // Add zig-clap dependency
     const yazap = b.dependency("yazap", .{});
