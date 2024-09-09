@@ -1,4 +1,6 @@
 const std = @import("std");
+const Keccak256 = std.crypto.hash.sha3.Keccak256;
+const Ristretto255 = std.crypto.ecc.Ristretto255;
 const yazap = @import("yazap");
 const shamir = @import("shamir.zig");
 
@@ -56,21 +58,27 @@ pub fn main() !void {
 
         const threshold = try std.fmt.parseInt(u8, gen_cmd_matches.getSingleValue("threshold").?, 10);
         const total = try std.fmt.parseInt(u8, gen_cmd_matches.getSingleValue("total").?, 10);
-        const secret = gen_cmd_matches.getSingleValue("secret").?;
+        const raw_secret = gen_cmd_matches.getSingleValue("secret").?;
 
-        // Secret can have max size of 255
-        var buffer: [255]u8 = undefined;
-        const secret_slice = buffer[0..secret.len];
-        std.mem.copyForwards(u8, secret_slice, secret);
-        const secret_list = std.ArrayList(u8).fromOwnedSlice(allocator, secret_slice);
+        var secret: [32]u8 = undefined;
+        Keccak256.hash(raw_secret, &secret, .{});
+        secret = Ristretto255.scalar.reduce(secret);
 
-        const shares = try shamir.generate(secret_list, total, threshold, allocator);
+        try stdout.print("hashed secret: ", .{});
+        for (0..secret.len) |i| {
+            try stdout.print("{X:0>2}", .{secret[i]});
+        }
+        try stdout.print("\n", .{});
+
+        const generated = try shamir.generate(secret, total, threshold, allocator);
+        const shares = generated.shares;
         for (shares.items, 0..) |share, i| {
             if (i > 0) {
                 try stdout.print("\n", .{});
             }
-            for (share.items) |s| {
-                try stdout.print("{X:0>2}", .{s});
+            const bytes = share.toBytes();
+            for (bytes) |b| {
+                try stdout.print("{X:0>2}", .{b});
             }
         }
 
@@ -85,34 +93,29 @@ pub fn main() !void {
             return;
         }
 
-        const shares = gen_cmd_matches.getMultiValues("shares").?;
-        var share_lists = std.ArrayList(std.ArrayList(u8)).init(allocator);
-        defer share_lists.deinit();
+        const raw_shares = gen_cmd_matches.getMultiValues("shares").?;
+        var shares = std.ArrayList(shamir.Share).init(allocator);
+        defer shares.deinit();
 
-        for (shares) |raw_share| {
+        for (raw_shares) |raw_share| {
             // Input is expected to be in 2-digit hex format
-            var buffer: [256]u8 = undefined;
+            var buffer: [64]u8 = undefined;
             var i: usize = 0;
             while (i < raw_share.len) : (i += 2) {
                 const raw_hex = raw_share[i .. i + 2];
                 const hex = try std.fmt.parseInt(u8, raw_hex, 16);
                 buffer[i / 2] = hex;
             }
-            const s_slice = buffer[0 .. raw_share.len / 2];
-            const share_list = std.ArrayList(u8).fromOwnedSlice(allocator, s_slice);
-
-            // Clone is required to prevent being overwritten
-            // in subsequent iteration of loop
-            const share_list_clone = try share_list.clone();
-            try share_lists.append(share_list_clone);
+            const share = shamir.Share.fromBytes(buffer);
+            try shares.append(share);
         }
 
-        const share_lists_slice = try share_lists.toOwnedSlice();
-        const secret = try shamir.reconstruct(share_lists_slice, allocator);
+        // const share_lists_slice = try share_lists.toOwnedSlice();
+        const secret = try shamir.reconstruct(shares.items, allocator);
 
         try stdout.print("Regenerated secret: ", .{});
-        for (secret.items) |s| {
-            try stdout.print("{c}", .{s});
+        for (0..secret.len) |i| {
+            try stdout.print("{X:0>2}", .{secret[i]});
         }
 
         try bw.flush();

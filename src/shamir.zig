@@ -103,6 +103,16 @@ fn evaluate(coefficients: std.ArrayList(CompressedScalar), x: CompressedScalar, 
 pub const Share = struct {
     x: CompressedScalar,
     y: CompressedScalar,
+
+    const Self = @This();
+    pub fn toBytes(self: *const Self) [64]u8 {
+        return self.x ++ self.y;
+    }
+    pub fn fromBytes(bytes: [64]u8) Self {
+        const x = bytes[0..32].*;
+        const y = bytes[32..].*;
+        return Self{ .x = x, .y = y };
+    }
 };
 
 const Polynomial = struct {

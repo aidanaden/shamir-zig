@@ -1,12 +1,14 @@
 # shamir-secret-sharing
 
-![Github CI](https://github.com/privy-io/shamir-secret-sharing/workflows/Github%20CI/badge.svg)
-
 Simple zig implementation of [Shamir's Secret Sharing algorithm](https://en.wikipedia.org/wiki/Shamir%27s_Secret_Sharing).
 
-Uses GF(2^8). Implementation inspired by [privy-io/shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing) and [hashicorp/vault](https://github.com/hashicorp/vault/tree/main/shamir).
+2 implementations exist:
 
-Includes a CLI app for independent/one-time using of shamir secret sharing.
+1. Uses GF(2^8). Implementation inspired by [privy-io/shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing) and [hashicorp/vault](https://github.com/hashicorp/vault/tree/main/shamir).
+
+2. Uses Ristretto255. Implementation inspired by [coinbase/kryptology](https://github.com/coinbase/kryptology)
+
+Includes a CLI app for independent use of shamir secret sharing.
 
 ## Security considerations
 
