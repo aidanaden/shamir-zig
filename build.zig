@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     const yazap = b.dependency("yazap", .{});
 
     const exe = b.addExecutable(.{
-        .name = "sss",
+        .name = "shamir",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/sss.zig"),
+        .root_source_file = b.path("src/shamir.zig"),
         .target = target,
         .optimize = optimize,
     });

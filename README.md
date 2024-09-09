@@ -42,7 +42,7 @@ We can `generate` shares from a given secret and later `reconstruct` the secret 
 ### CLI
 
 ```sh
-./zig-out/bin/sss generate --threshold 4 --total 10 --secret mynamejeff
+./zig-out/bin/shamir generate --threshold 4 --total 10 --secret mynamejeff
 # --- output ---
 # 582119FAF8CD1A1B8B478B
 # E2C639374D22AF2F7F9A92
@@ -57,7 +57,7 @@ We can `generate` shares from a given secret and later `reconstruct` the secret 
 ```
 
 ```sh
-./zig-out/bin/sss reconstruct -s=18D1CD0C31AB9CF5543BBA,C724D4678DF493727F99D0,B611E915CAB0609FABEC18,CF8770A2BFCCFD4712EDB2
+./zig-out/bin/shamir reconstruct -s=18D1CD0C31AB9CF5543BBA,C724D4678DF493727F99D0,B611E915CAB0609FABEC18,CF8770A2BFCCFD4712EDB2
 # --- output ---
 # Regenerated secret: mynamejeff
 ```
