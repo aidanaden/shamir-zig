@@ -218,7 +218,7 @@ fn evaluate(coefficients: std.ArrayList(u8), x: u8, degree: u8) EvaluationError!
     return result;
 }
 
-const Share = struct {
+pub const Share = struct {
     x: u8,
     y: std.ArrayList(u8),
 
