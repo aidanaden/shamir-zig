@@ -1,6 +1,6 @@
 const std = @import("std");
 const yazap = @import("yazap");
-const shamir = @import("sss.zig");
+const shamir = @import("shamir.zig");
 
 const log = std.log;
 const App = yazap.App;
