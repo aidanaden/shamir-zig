@@ -26,7 +26,7 @@ zig fetch --save git+https://github.com/aidanaden/shamir-zig
 
 ```zig
 const shamir = b.dependency("shamir-zig", .{});
-exe.root_module.addImport("shamir", yazap.module("shamir"));
+exe.root_module.addImport("shamir", shamir.module("shamir"));
 ```
 
 ## Build
