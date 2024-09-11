@@ -56,9 +56,9 @@ pub fn Shamir(comptime T: type) type {
 }
 
 pub const ShamirRistretto = Shamir(CompressedScalar);
-pub const ShamirRf256 = Shamir(u8);
+pub const ShamirRF256 = Shamir(u8);
 
-const shamir_RF256 = ShamirRf256.init(std.testing.allocator);
+const shamir_RF256 = ShamirRF256.init(std.testing.allocator);
 const shamir_Ristretto255 = ShamirRistretto.init(std.testing.allocator);
 
 const expect = std.testing.expect;
@@ -78,7 +78,7 @@ test "rf256: can split secret into multiple shares" {
     assert(first_share.y.items.len == secret.items.len);
     const second_share = shares.items[1];
 
-    var thresholds = [2]ShamirRf256.Share{ first_share, second_share };
+    var thresholds = [2]ShamirRF256.Share{ first_share, second_share };
     const reconstructed = try shamir_RF256.reconstruct(&thresholds);
     defer reconstructed.deinit();
 
@@ -105,7 +105,7 @@ test "rf256: can split a 1 byte secret" {
     assert(first_share.y.items.len == secret.items.len);
     const third_share = shares.items[2];
 
-    var thresholds = [2]ShamirRf256.Share{ first_share, third_share };
+    var thresholds = [2]ShamirRF256.Share{ first_share, third_share };
     const reconstructed = try shamir_RF256.reconstruct(&thresholds);
     defer reconstructed.deinit();
 
@@ -132,7 +132,7 @@ test "rf256: can require all shares to reconstruct" {
     const third_share = shares.items[2];
     assert(third_share.y.items.len == secret.items.len);
 
-    var thresholds = [3]ShamirRf256.Share{ first_share, second_share, third_share };
+    var thresholds = [3]ShamirRF256.Share{ first_share, second_share, third_share };
     const reconstructed = try shamir_RF256.reconstruct(&thresholds);
     defer reconstructed.deinit();
 
@@ -163,7 +163,7 @@ test "rf256: can combine using any combination of shares that meets the given th
                     continue;
                 }
 
-                var thresholds = [3]ShamirRf256.Share{ shares.items[i], shares.items[j], shares.items[k] };
+                var thresholds = [3]ShamirRF256.Share{ shares.items[i], shares.items[j], shares.items[k] };
                 const reconstructed = try shamir_RF256.reconstruct(&thresholds);
 
                 assert(std.mem.eql(u8, secret.items, reconstructed.items));
