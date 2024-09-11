@@ -50,24 +50,15 @@ const EXP_TABLE = [256]u8{
     0x66, 0xb2, 0x76, 0x60, 0xda, 0xc5, 0xf3, 0xf6, 0xaa, 0xcd, 0x9a, 0xa0, 0x75, 0x54, 0x0e, 0x01,
 };
 
-fn get_rand_bytes(num_bytes: u8, allocator: Allocator) !std.ArrayList(u8) {
-    var values = std.ArrayList(u8).init(allocator);
-    for (0..num_bytes) |_| {
-        try values.append(std.crypto.random.intRangeAtMost(u8, 0, 255));
-    }
-    return values;
+pub fn get_rand_byte() u8 {
+    var bytes: [1]u8 = undefined;
+    std.crypto.random.bytes(&bytes);
+    return bytes[0];
 }
 
-fn get_rand_byte(allocator: Allocator) !u8 {
-    const rand_bytes = try get_rand_bytes(1, allocator);
-    defer rand_bytes.deinit();
-    const value = rand_bytes.items[0];
-    return value;
-}
-
-fn get_nonzero_rand_byte(allocator: Allocator) !u8 {
+pub fn get_nonzero_rand_byte() u8 {
     while (true) {
-        const byte = try get_rand_byte(allocator);
+        const byte = get_rand_byte();
         if (byte > 0) {
             return byte;
         }
@@ -78,7 +69,7 @@ fn get_nonzero_rand_byte(allocator: Allocator) !u8 {
 ///
 /// Returned coefficients are always `degree + 1` in length since
 /// the given secret (intercept) is stored as the first value
-fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayList(u8) {
+pub fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayList(u8) {
     var coefficients = std.ArrayList(u8).init(allocator);
     // The first byte is always the intercept
     try coefficients.append(intercept);
@@ -86,7 +77,7 @@ fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayL
         // degree is equal to t-1, where t is the threshold of required shares.
         // The coefficient at t-1 cannot equal 0.
         const coeff_idx = i + 1;
-        const byte = try if (coeff_idx == degree) get_nonzero_rand_byte(allocator) else get_rand_byte(allocator);
+        const byte = if (coeff_idx == degree) get_nonzero_rand_byte() else get_rand_byte();
         try coefficients.append(byte);
     }
     return coefficients;
@@ -94,7 +85,7 @@ fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayL
 
 /// Creates a set of values from [1, 256).
 /// Returns a psuedo-random shuffling of the set.
-fn new_coordinates(allocator: Allocator) ![255]u8 {
+pub fn new_coordinates() [255]u8 {
     var coordinates = std.mem.zeroes([255]u8);
     for (0..255) |i| {
         coordinates[i] = @as(u8, @intCast(i)) + 1;
@@ -106,10 +97,9 @@ fn new_coordinates(allocator: Allocator) ![255]u8 {
     // have a length of 255 and byte values are between 0 and 255 inclusive. The only value that
     // does not map neatly here is if the random byte is 255, since that value used as an index
     // would be out of bounds. Thus, for bytes whose value is 255, wrap around to 0.
-    const random_indices = try get_rand_bytes(255, allocator);
-    defer random_indices.deinit();
     for (0..255) |i| {
-        const j: u8 = random_indices.items[i] % 255; // Make sure to handle the case where the byte is 255.
+        const random_index = get_rand_byte();
+        const j: u8 = random_index % 255; // Make sure to handle the case where the byte is 255.
         const temp = coordinates[i];
         coordinates[i] = coordinates[j];
         coordinates[j] = temp;
@@ -154,7 +144,7 @@ const InterpolationError = error{SampleLengthMismatch} || DivisionError;
 ///
 /// @see `Definition` section of https://en.wikipedia.org/wiki/Lagrange_polynomial to best
 /// understand the following code
-fn interpolate_polynomial(x_samples: []u8, y_samples: []u8, x: u8) InterpolationError!u8 {
+pub fn interpolate_polynomial(x_samples: []u8, y_samples: []u8, x: u8) InterpolationError!u8 {
     if (x_samples.len != y_samples.len) {
         return InterpolationError.SampleLengthMismatch;
     }
@@ -223,7 +213,6 @@ pub const Share = struct {
     y: std.ArrayList(u8),
 
     const Self = @This();
-
     fn init(x: u8, allocator: Allocator) Share {
         return Share{ .x = x, .y = std.ArrayList(u8).init(allocator) };
     }
@@ -232,34 +221,15 @@ pub const Share = struct {
     }
 };
 
-const Polynomial = struct {
-    coefficients: std.ArrayList(u8),
-
-    const Self = @This();
-
-    fn init(allocator: Allocator) Self {
-        return Polynomial{ .coefficients = std.ArrayList(u8).init(allocator) };
-    }
-    fn deinit(self: *Self) void {
-        self.coefficients.deinit();
-    }
-};
-
-const GeneratedShares = struct {
+pub const GeneratedShares = struct {
     shares: std.ArrayList(Share),
-    polynomials: std.ArrayList(Polynomial),
 
     const Self = @This();
-
-    fn deinit(self: *const Self) void {
+    pub fn deinit(self: *const Self) void {
         for (0..self.shares.items.len) |i| {
             self.shares.items[i].deinit();
         }
-        for (0..self.polynomials.items.len) |i| {
-            self.polynomials.items[i].deinit();
-        }
         self.shares.deinit();
-        self.polynomials.deinit();
     }
 };
 
@@ -272,13 +242,13 @@ const GeneratedShares = struct {
 ///
 /// @returns A list of `shares` shares.
 pub fn generate(
-    secret: std.ArrayList(u8),
+    secret: []u8,
     num_shares: u8,
     threshold: u8,
     allocator: Allocator,
 ) !GeneratedShares {
     // secret must be a non-empty
-    assert(secret.items.len > 0);
+    assert(secret.len > 0);
     // num_shares must be a number in the range [2, 256)
     assert((num_shares >= 2) and (num_shares <= 255));
     // threshold must be a number in the range [2, 256)
@@ -287,8 +257,8 @@ pub fn generate(
     assert(num_shares >= threshold);
 
     var shares = try std.ArrayList(Share).initCapacity(allocator, num_shares);
-    const secret_len = secret.items.len;
-    const x_coordinates = try new_coordinates(allocator);
+    const secret_len = secret.len;
+    const x_coordinates = new_coordinates();
 
     // Generate unique x-value for each share
     for (0..num_shares) |k| {
@@ -307,21 +277,18 @@ pub fn generate(
     // This results in share's containing [y1, y2, y3, ... yN, x]
     // where N is total number of bytes in secret
     const degree = threshold - 1;
-    var polynomials = std.ArrayList(Polynomial).init(allocator);
     for (0..secret_len) |i| {
-        const secret_byte = secret.items[i];
+        const secret_byte = secret[i];
         const coeffs = try new_coefficients(secret_byte, degree, allocator);
-        const polynomial = Polynomial{ .coefficients = coeffs };
-
         for (0..num_shares) |k| {
             const x = x_coordinates[k];
             const y = try evaluate(coeffs, x, degree);
             try shares.items[k].y.append(y);
         }
-        try polynomials.append(polynomial);
+        coeffs.deinit();
     }
 
-    return GeneratedShares{ .shares = shares, .polynomials = polynomials };
+    return GeneratedShares{ .shares = shares };
 }
 
 const CombineError = error{InvalidDuplicateShareFound};
@@ -398,7 +365,7 @@ test "can split secret into multiple shares" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try generate(secret, 3, 2, std.testing.allocator);
+    const generated = try generate(secret.items, 3, 2, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 3);
@@ -425,7 +392,7 @@ test "can split a 1 byte secret" {
     try secret.appendSlice(&[_]u8{0x33});
     assert(secret.items.len == 1);
 
-    const generated = try generate(secret, 3, 2, std.testing.allocator);
+    const generated = try generate(secret.items, 3, 2, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 3);
@@ -447,7 +414,7 @@ test "can require all shares to reconstruct" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try generate(secret, 3, 3, std.testing.allocator);
+    const generated = try generate(secret.items, 3, 3, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 3);
@@ -474,7 +441,7 @@ test "can combine using any combination of shares that meets the given threshold
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try generate(secret, 5, 3, std.testing.allocator);
+    const generated = try generate(secret.items, 5, 3, std.testing.allocator);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 5);
@@ -508,7 +475,7 @@ test "can split secret into 255 shares" {
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try generate(secret, 255, 255, std.testing.allocator);
+    const generated = try generate(secret.items, 255, 255, std.testing.allocator);
     defer generated.deinit();
     var shares = generated.shares;
     assert(shares.items.len == 255);

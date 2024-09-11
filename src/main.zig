@@ -23,6 +23,8 @@ pub fn main() !void {
     var app = App.init(allocator, "shamir", "Shamir Secret Sharing CLI tool");
     defer app.deinit();
 
+    const shamir_Ristretto255 = shamir.ShamirRistretto.init(allocator);
+
     var cli = app.rootCommand();
 
     var generate_cmd = app.createCommand("generate", "Generate shares given a secret key");
@@ -70,8 +72,9 @@ pub fn main() !void {
         }
         try stdout.print("\n", .{});
 
-        const generated = try shamir.generate(secret, total, threshold, allocator);
+        const generated = try shamir_Ristretto255.generate(&secret, total, threshold);
         const shares = generated.shares;
+
         for (shares.items, 0..) |share, i| {
             if (i > 0) {
                 try stdout.print("\n", .{});
@@ -94,7 +97,7 @@ pub fn main() !void {
         }
 
         const raw_shares = gen_cmd_matches.getMultiValues("shares").?;
-        var shares = std.ArrayList(shamir.Share).init(allocator);
+        var shares = std.ArrayList(shamir.ShamirRistretto.Share).init(allocator);
         defer shares.deinit();
 
         for (raw_shares) |raw_share| {
@@ -106,12 +109,12 @@ pub fn main() !void {
                 const hex = try std.fmt.parseInt(u8, raw_hex, 16);
                 buffer[i / 2] = hex;
             }
-            const share = shamir.Share.fromBytes(buffer);
+            const share = shamir.ristretto255.Share.fromBytes(buffer);
             try shares.append(share);
         }
 
         // const share_lists_slice = try share_lists.toOwnedSlice();
-        const secret = try shamir.reconstruct(shares.items, allocator);
+        const secret = try shamir_Ristretto255.reconstruct(shares.items);
 
         try stdout.print("Regenerated secret: ", .{});
         for (0..secret.len) |i| {

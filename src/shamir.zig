@@ -5,247 +5,199 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
 const CompressedScalar = std.crypto.ecc.Ristretto255.scalar.CompressedScalar;
 
-pub const one: CompressedScalar = [_]u8{0} ** 31 ++ [_]u8{1};
+pub const gf256 = @import("gf256.zig");
+pub const ristretto255 = @import("ristretto255.zig");
 
-/// Creates a pseudo-random set of coefficients for a polynomial.
-///
-/// Returned coefficients are always `degree + 1` in length since
-/// the given secret (intercept) is stored as the first value
-fn new_coefficients(intercept: CompressedScalar, degree: u8, allocator: Allocator) !std.ArrayList(CompressedScalar) {
-    var coefficients = std.ArrayList(CompressedScalar).init(allocator);
-    // The first byte is always the intercept
-    try coefficients.append(intercept);
-    // degree is equal to t-1, where t is the
-    // threshold of required shares.
-    for (0..degree) |_| {
-        const rand_scalar = Ristretto255.scalar.random();
-        try coefficients.append(rand_scalar);
-    }
-    return coefficients;
-}
+pub fn Shamir(comptime T: type) type {
+    return struct {
+        const Self = @This();
 
-fn new_coordinates() ![255]CompressedScalar {
-    var coordinates: [255]CompressedScalar = undefined;
-    for (0..255) |i| {
-        coordinates[i] = Ristretto255.scalar.random();
-    }
-    return coordinates;
-}
-
-const InterpolationError = error{SampleLengthMismatch};
-
-/// Takes N sample points and returns the value at a given x using a lagrange interpolation.
-///
-/// @see `Definition` section of https://en.wikipedia.org/wiki/Lagrange_polynomial to best
-/// understand the following code
-fn interpolate_polynomial(x_samples: []CompressedScalar, y_samples: []CompressedScalar) InterpolationError!CompressedScalar {
-    if (x_samples.len != y_samples.len) {
-        return InterpolationError.SampleLengthMismatch;
-    }
-
-    const limit = x_samples.len;
-    var result: CompressedScalar = Ristretto255.scalar.zero;
-
-    // Calculate basis polynomials for jth share
-    for (0..limit) |j| {
-        var num = one;
-        var denom = one;
-        for (0..limit) |k| {
-            // Basis polynomial is calculated
-            // with x-values of all other k-1 shares,
-            // hence we ignore our own x-value
-            if (j == k) {
-                continue;
-            }
-            // Corresponds to `x - x(k)` but addition
-            // and subtraction are equivalent in GF
-            num = Ristretto255.scalar.mul(num, x_samples[k]);
-            denom = Ristretto255.scalar.mul(denom, Ristretto255.scalar.sub(x_samples[k], x_samples[j]));
-            // Corresponds to `x(j) - x(k)` but addition
-            // and subtraction are equivalent in GF
+        allocator: Allocator,
+        pub fn init(allocator: Allocator) Self {
+            return Self{ .allocator = allocator };
         }
 
-        std.debug.assert(!Ristretto255.scalar.Scalar.fromBytes(denom).isZero());
+        pub const Secret = switch (T) {
+            u8 => std.ArrayList(u8),
+            CompressedScalar => CompressedScalar,
+            else => unreachable,
+        };
 
-        const denom_expanded = Ristretto255.scalar.Scalar.fromBytes(denom);
-        const denom_inverted = Ristretto255.scalar.Scalar.invert(denom_expanded).toBytes();
-        result = Ristretto255.scalar.add(result, Ristretto255.scalar.mul(y_samples[j], Ristretto255.scalar.mul(num, denom_inverted)));
-    }
+        pub const Share = switch (T) {
+            u8 => gf256.Share,
+            CompressedScalar => ristretto255.Share,
+            else => unreachable,
+        };
 
-    return result;
-}
+        pub const GeneratedShares = switch (T) {
+            u8 => gf256.GeneratedShares,
+            CompressedScalar => ristretto255.GeneratedShares,
+            else => unreachable,
+        };
 
-const EvaluationError = error{InvalidZeroXValue};
-
-/// Evaluates a polynomial with the given x using Horner's method.
-/// @see https://en.wikipedia.org/wiki/Horner%27s_method
-///
-/// This is used to evaluate the y-value for each share's randomly
-/// assigned unique x-value given
-fn evaluate(coefficients: std.ArrayList(CompressedScalar), x: CompressedScalar, degree: u8) EvaluationError!CompressedScalar {
-    if (Ristretto255.scalar.Scalar.fromBytes(x).isZero()) {
-        return EvaluationError.InvalidZeroXValue;
-    }
-    // Initialise result with final coefficient
-    // and calculate backwards recursively
-    var result = coefficients.items[degree];
-    var i = degree - 1;
-    while (i >= 0) : (i -= 1) {
-        const coeff = coefficients.items[i];
-        result = Ristretto255.scalar.add(Ristretto255.scalar.mul(result, x), coeff);
-        if (i == 0) {
-            break;
-        }
-    }
-    return result;
-}
-
-pub const Share = struct {
-    x: CompressedScalar,
-    y: CompressedScalar,
-
-    const Self = @This();
-    pub fn toBytes(self: *const Self) [64]u8 {
-        return self.x ++ self.y;
-    }
-    pub fn fromBytes(bytes: [64]u8) Self {
-        const x = bytes[0..32].*;
-        const y = bytes[32..].*;
-        return Self{ .x = x, .y = y };
-    }
-};
-
-const Polynomial = struct {
-    coefficients: std.ArrayList(CompressedScalar),
-
-    const Self = @This();
-
-    fn init(allocator: Allocator) Self {
-        return Polynomial{ .coefficients = std.ArrayList(u8).init(allocator) };
-    }
-    fn deinit(self: *const Self) void {
-        self.coefficients.deinit();
-    }
-};
-
-const GeneratedShares = struct {
-    shares: std.ArrayList(Share),
-    polynomial: Polynomial,
-
-    const Self = @This();
-
-    fn deinit(self: *const Self) void {
-        self.polynomial.deinit();
-        self.shares.deinit();
-    }
-};
-
-/// Generate `shares` number of shares from given `secret` value, requiring `threshold` of them to reconstruct `secret`.
-///
-/// @param `secret` The secret value to split into shares.
-/// @param `shares` The total number of shares to split `secret` into. Must be at least 2 and at most 255.
-/// @param `threshold` The minimum number of shares required to reconstruct `secret`. Must be at least 2 and at most 255.
-/// @param `allocator` Allocator to allocate arraylists on the heap
-///
-/// @returns A list of `shares` shares.
-pub fn generate(
-    secret: CompressedScalar,
-    num_shares: u8,
-    threshold: u8,
-    allocator: Allocator,
-) !GeneratedShares {
-    // secret must be a non-empty
-    assert(!Ristretto255.scalar.Scalar.fromBytes(secret).isZero());
-    // num_shares must be a number in the range [2, 256)
-    assert((num_shares >= 2) and (num_shares <= 255));
-    // threshold must be a number in the range [2, 256)
-    assert((threshold >= 2) and (threshold <= 255));
-    // total number of shares must be greater than or equal to the required threshold
-    assert(num_shares >= threshold);
-
-    var shares = try std.ArrayList(Share).initCapacity(allocator, num_shares);
-    const x_coordinates = try new_coordinates();
-
-    // Generate y-values with the following
-    //
-    // 1. Generate curve via coefficients of length `degree`
-    // 2. Calculate y-value of each share's x-value within generated curve
-    // 3. Store y-value
-    const degree = threshold - 1;
-    const coeffs = try new_coefficients(secret, degree, allocator);
-    const polynomial = Polynomial{ .coefficients = coeffs };
-
-    for (0..num_shares) |k| {
-        const x = x_coordinates[k];
-        const y = try evaluate(coeffs, x, degree);
-        const share = Share{ .x = x, .y = y };
-        try shares.append(share);
-    }
-
-    return GeneratedShares{ .shares = shares, .polynomial = polynomial };
-}
-
-const CombineError = error{InvalidDuplicateShareFound};
-
-/// Reconstruct the secret from the given shares.
-///
-/// @param `shares` A list of shares to reconstruct the secret from. Must be at least 2 and at most 255.
-/// @param `allocator` Allocator to allocate arraylists on the heap
-///
-/// @returns The reconstructed secret.
-pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
-    // Shares must be an array with length in the range [2, 255)
-    assert((shares.len >= 2) and (shares.len <= 255));
-
-    const num_shares = shares.len;
-
-    var x_samples = std.ArrayList(CompressedScalar).init(allocator);
-    defer x_samples.deinit();
-    var y_samples = std.ArrayList(CompressedScalar).init(allocator); // const xSamples = new Uint8Array(sharesLength);
-    defer y_samples.deinit();
-    for (num_shares) |_| {
-        try y_samples.append(Ristretto255.scalar.zero);
-    }
-
-    for (0..num_shares) |i| {
-        const share = shares[i];
-        const share_id = share.x;
-
-        // Filter for duplicate x-values, all
-        // x-values are expected to be unique
-        const is_duplicate = for (x_samples.items) |eid| {
-            if (Ristretto255.scalar.Scalar.isZero(Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(eid, share_id)))) {
-                break true;
-            }
-        } else false;
-        if (is_duplicate) {
-            return CombineError.InvalidDuplicateShareFound;
+        pub fn generate(self: *const Self, secret: []u8, num_shares: u8, threshold: u8) !GeneratedShares {
+            const generated = switch (T) {
+                u8 => try gf256.generate(secret, num_shares, threshold, self.allocator),
+                CompressedScalar => try ristretto255.generate(secret, num_shares, threshold, self.allocator),
+                else => unreachable,
+            };
+            return generated;
         }
 
-        try x_samples.append(share_id);
-    }
-
-    // Set y-value for each share
-    for (0..num_shares) |j| {
-        const y = shares[j].y;
-        y_samples.items[j] = y;
-    }
-
-    // Interpolate the polynomial and compute the value
-    // at y-intersect aka when x = 0 (secret)
-    const secret = try interpolate_polynomial(x_samples.items, y_samples.items);
-    return secret;
+        pub fn reconstruct(self: *const Self, shares: []Share) !Secret {
+            const secret = switch (T) {
+                u8 => try gf256.reconstruct(shares, self.allocator),
+                CompressedScalar => try ristretto255.reconstruct(shares, self.allocator),
+                else => unreachable,
+            };
+            return secret;
+        }
+    };
 }
+
+pub const ShamirRistretto = Shamir(CompressedScalar);
+pub const ShamirRf256 = Shamir(u8);
+
+const shamir_RF256 = ShamirRf256.init(std.testing.allocator);
+const shamir_Ristretto255 = ShamirRistretto.init(std.testing.allocator);
 
 const expect = std.testing.expect;
 
-test "can split secret into multiple shares" {
+test "rf256: can split secret into multiple shares" {
+    var secret = std.ArrayList(u8).init(std.testing.allocator);
+    defer secret.deinit();
+    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
+    assert(secret.items.len == 6);
+
+    const generated = try shamir_RF256.generate(secret.items, 3, 2);
+    defer generated.deinit();
+    const shares = generated.shares;
+    assert(shares.items.len == 3);
+
+    const first_share = shares.items[0];
+    assert(first_share.y.items.len == secret.items.len);
+    const second_share = shares.items[1];
+
+    var thresholds = [2]ShamirRf256.Share{ first_share, second_share };
+    const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+    defer reconstructed.deinit();
+
+    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+
+    std.debug.print("\nreconstructed (integers): ", .{});
+    try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
+    std.debug.print("\nreconstructed (string): ", .{});
+    try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
+}
+
+test "rf256: can split a 1 byte secret" {
+    var secret = std.ArrayList(u8).init(std.testing.allocator);
+    defer secret.deinit();
+    try secret.appendSlice(&[_]u8{0x33});
+    assert(secret.items.len == 1);
+
+    const generated = try shamir_RF256.generate(secret.items, 3, 2);
+    defer generated.deinit();
+    const shares = generated.shares;
+    assert(shares.items.len == 3);
+
+    const first_share = shares.items[0];
+    assert(first_share.y.items.len == secret.items.len);
+    const third_share = shares.items[2];
+
+    var thresholds = [2]ShamirRf256.Share{ first_share, third_share };
+    const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+    defer reconstructed.deinit();
+
+    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+}
+
+test "rf256: can require all shares to reconstruct" {
+    var secret = std.ArrayList(u8).init(std.testing.allocator);
+    defer secret.deinit();
+    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
+    assert(secret.items.len == 6);
+
+    const generated = try shamir_RF256.generate(secret.items, 3, 3);
+    defer generated.deinit();
+    const shares = generated.shares;
+    assert(shares.items.len == 3);
+
+    const first_share = shares.items[0];
+    assert(first_share.y.items.len == secret.items.len);
+
+    const second_share = shares.items[1];
+    assert(second_share.y.items.len == secret.items.len);
+
+    const third_share = shares.items[2];
+    assert(third_share.y.items.len == secret.items.len);
+
+    var thresholds = [3]ShamirRf256.Share{ first_share, second_share, third_share };
+    const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+    defer reconstructed.deinit();
+
+    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+}
+
+test "rf256: can combine using any combination of shares that meets the given threshold" {
+    var secret = std.ArrayList(u8).init(std.testing.allocator);
+    defer secret.deinit();
+    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
+    assert(secret.items.len == 6);
+
+    const generated = try shamir_RF256.generate(secret.items, 5, 3);
+    defer generated.deinit();
+    const shares = generated.shares;
+    assert(shares.items.len == 5);
+
+    for (shares.items, 0..) |s, i| {
+        assert(s.y.items.len == secret.items.len);
+
+        for (0..5) |j| {
+            if (j == i) {
+                continue;
+            }
+
+            for (0..5) |k| {
+                if (k == i or k == j) {
+                    continue;
+                }
+
+                var thresholds = [3]ShamirRf256.Share{ shares.items[i], shares.items[j], shares.items[k] };
+                const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+
+                assert(std.mem.eql(u8, secret.items, reconstructed.items));
+                reconstructed.deinit();
+            }
+        }
+    }
+}
+
+test "rf256: can split secret into 255 shares" {
+    var secret = std.ArrayList(u8).init(std.testing.allocator);
+    defer secret.deinit();
+    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
+    assert(secret.items.len == 6);
+
+    const generated = try shamir_RF256.generate(secret.items, 255, 255);
+    defer generated.deinit();
+    var shares = generated.shares;
+    assert(shares.items.len == 255);
+    const shares_arr = try shares.toOwnedSlice();
+
+    const reconstructed = try shamir_RF256.reconstruct(shares_arr);
+    defer reconstructed.deinit();
+
+    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+}
+
+test "ristretto255: can split secret into multiple shares" {
     const word_secret = "secret";
     var secret: [32]u8 = undefined;
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try generate(secret, 3, 2, std.testing.allocator);
+    const generated = try shamir_Ristretto255.generate(&secret, 3, 2);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 3);
@@ -253,20 +205,20 @@ test "can split secret into multiple shares" {
     const first_share = shares.items[0];
     const second_share = shares.items[1];
 
-    var thresholds = [2]Share{ first_share, second_share };
-    const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
+    var thresholds = [2]ShamirRistretto.Share{ first_share, second_share };
+    const reconstructed = try shamir_Ristretto255.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
     try expect(isEqual);
 }
 
-test "can require all shares to reconstruct" {
+test "ristretto255: can require all shares to reconstruct" {
     const word_secret = "secret";
     var secret: [32]u8 = undefined;
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try generate(secret, 3, 2, std.testing.allocator);
+    const generated = try shamir_Ristretto255.generate(&secret, 3, 2);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 3);
@@ -275,20 +227,20 @@ test "can require all shares to reconstruct" {
     const second_share = shares.items[1];
     const third_share = shares.items[2];
 
-    var thresholds = [_]Share{ first_share, second_share, third_share };
-    const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
+    var thresholds = [_]ShamirRistretto.Share{ first_share, second_share, third_share };
+    const reconstructed = try shamir_Ristretto255.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
     try expect(isEqual);
 }
 
-test "can combine using any combination of shares that meets the given threshold" {
+test "ristretto255: can combine using any combination of shares that meets the given threshold" {
     const word_secret = "secret";
     var secret: [32]u8 = undefined;
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try generate(secret, 5, 3, std.testing.allocator);
+    const generated = try shamir_Ristretto255.generate(&secret, 5, 3);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 5);
@@ -302,8 +254,8 @@ test "can combine using any combination of shares that meets the given threshold
                 if (k == i or k == j) {
                     continue;
                 }
-                var thresholds = [3]Share{ shares.items[i], shares.items[j], shares.items[k] };
-                const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
+                var thresholds = [3]ShamirRistretto.Share{ shares.items[i], shares.items[j], shares.items[k] };
+                const reconstructed = try shamir_Ristretto255.reconstruct(&thresholds);
                 const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
                 try expect(isEqual);
             }
@@ -311,18 +263,18 @@ test "can combine using any combination of shares that meets the given threshold
     }
 }
 
-test "can split secret into 255 shares" {
+test "ristretto255: can split secret into 255 shares" {
     const word_secret = "secret";
     var secret: [32]u8 = undefined;
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try generate(secret, 255, 255, std.testing.allocator);
+    const generated = try shamir_Ristretto255.generate(&secret, 255, 255);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 255);
 
-    const reconstructed = try reconstruct(shares.items, std.testing.allocator);
+    const reconstructed = try shamir_Ristretto255.reconstruct(shares.items);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
     try expect(isEqual);
