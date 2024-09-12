@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Keccak256 = std.crypto.hash.sha3.Keccak256;
-const CompressedScalar = std.crypto.ecc.Ristretto255.scalar.CompressedScalar;
+const CompressedScalar = Ristretto255.scalar.CompressedScalar;
 
 pub const gf256 = @import("gf256.zig");
 pub const ristretto255 = @import("ristretto255.zig");
@@ -35,7 +35,7 @@ pub fn Shamir(comptime T: type) type {
             else => unreachable,
         };
 
-        pub fn generate(self: *const Self, secret: []u8, num_shares: u8, threshold: u8) !GeneratedShares {
+        pub fn generate(self: *const Self, secret: []const u8, num_shares: u8, threshold: u8) !GeneratedShares {
             const generated = switch (T) {
                 u8 => try gf256.generate(secret, num_shares, threshold, self.allocator),
                 CompressedScalar => try ristretto255.generate(secret, num_shares, threshold, self.allocator),
@@ -56,20 +56,20 @@ pub fn Shamir(comptime T: type) type {
 }
 
 pub const ShamirRistretto = Shamir(CompressedScalar);
-pub const ShamirRF256 = Shamir(u8);
+pub const ShamirGF256 = Shamir(u8);
 
-const shamir_RF256 = ShamirRF256.init(std.testing.allocator);
-const shamir_Ristretto255 = ShamirRistretto.init(std.testing.allocator);
+const shamir_gf256 = ShamirGF256.init(std.testing.allocator);
+const shamir_ristretto255 = ShamirRistretto.init(std.testing.allocator);
 
 const expect = std.testing.expect;
 
-test "rf256: can split secret into multiple shares" {
+test "gf256: can split secret into multiple shares" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);
     defer secret.deinit();
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try shamir_RF256.generate(secret.items, 3, 2);
+    const generated = try shamir_gf256.generate(secret.items, 3, 2);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 3);
@@ -78,8 +78,8 @@ test "rf256: can split secret into multiple shares" {
     assert(first_share.y.items.len == secret.items.len);
     const second_share = shares.items[1];
 
-    var thresholds = [2]ShamirRF256.Share{ first_share, second_share };
-    const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+    var thresholds = [2]ShamirGF256.Share{ first_share, second_share };
+    const reconstructed = try shamir_gf256.reconstruct(&thresholds);
     defer reconstructed.deinit();
 
     assert(std.mem.eql(u8, secret.items, reconstructed.items));
@@ -90,13 +90,13 @@ test "rf256: can split secret into multiple shares" {
     try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
 }
 
-test "rf256: can split a 1 byte secret" {
+test "gf256: can split a 1 byte secret" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);
     defer secret.deinit();
     try secret.appendSlice(&[_]u8{0x33});
     assert(secret.items.len == 1);
 
-    const generated = try shamir_RF256.generate(secret.items, 3, 2);
+    const generated = try shamir_gf256.generate(secret.items, 3, 2);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 3);
@@ -105,20 +105,20 @@ test "rf256: can split a 1 byte secret" {
     assert(first_share.y.items.len == secret.items.len);
     const third_share = shares.items[2];
 
-    var thresholds = [2]ShamirRF256.Share{ first_share, third_share };
-    const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+    var thresholds = [2]ShamirGF256.Share{ first_share, third_share };
+    const reconstructed = try shamir_gf256.reconstruct(&thresholds);
     defer reconstructed.deinit();
 
     assert(std.mem.eql(u8, secret.items, reconstructed.items));
 }
 
-test "rf256: can require all shares to reconstruct" {
+test "gf256: can require all shares to reconstruct" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);
     defer secret.deinit();
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try shamir_RF256.generate(secret.items, 3, 3);
+    const generated = try shamir_gf256.generate(secret.items, 3, 3);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 3);
@@ -132,20 +132,20 @@ test "rf256: can require all shares to reconstruct" {
     const third_share = shares.items[2];
     assert(third_share.y.items.len == secret.items.len);
 
-    var thresholds = [3]ShamirRF256.Share{ first_share, second_share, third_share };
-    const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+    var thresholds = [3]ShamirGF256.Share{ first_share, second_share, third_share };
+    const reconstructed = try shamir_gf256.reconstruct(&thresholds);
     defer reconstructed.deinit();
 
     assert(std.mem.eql(u8, secret.items, reconstructed.items));
 }
 
-test "rf256: can combine using any combination of shares that meets the given threshold" {
+test "gf256: can combine using any combination of shares that meets the given threshold" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);
     defer secret.deinit();
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try shamir_RF256.generate(secret.items, 5, 3);
+    const generated = try shamir_gf256.generate(secret.items, 5, 3);
     defer generated.deinit();
     const shares = generated.shares;
     assert(shares.items.len == 5);
@@ -163,8 +163,8 @@ test "rf256: can combine using any combination of shares that meets the given th
                     continue;
                 }
 
-                var thresholds = [3]ShamirRF256.Share{ shares.items[i], shares.items[j], shares.items[k] };
-                const reconstructed = try shamir_RF256.reconstruct(&thresholds);
+                var thresholds = [3]ShamirGF256.Share{ shares.items[i], shares.items[j], shares.items[k] };
+                const reconstructed = try shamir_gf256.reconstruct(&thresholds);
 
                 assert(std.mem.eql(u8, secret.items, reconstructed.items));
                 reconstructed.deinit();
@@ -173,19 +173,19 @@ test "rf256: can combine using any combination of shares that meets the given th
     }
 }
 
-test "rf256: can split secret into 255 shares" {
+test "gf256: can split secret into 255 shares" {
     var secret = std.ArrayList(u8).init(std.testing.allocator);
     defer secret.deinit();
     try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
     assert(secret.items.len == 6);
 
-    const generated = try shamir_RF256.generate(secret.items, 255, 255);
+    const generated = try shamir_gf256.generate(secret.items, 255, 255);
     defer generated.deinit();
     var shares = generated.shares;
     assert(shares.items.len == 255);
     const shares_arr = try shares.toOwnedSlice();
 
-    const reconstructed = try shamir_RF256.reconstruct(shares_arr);
+    const reconstructed = try shamir_gf256.reconstruct(shares_arr);
     defer reconstructed.deinit();
 
     assert(std.mem.eql(u8, secret.items, reconstructed.items));
@@ -197,7 +197,7 @@ test "ristretto255: can split secret into multiple shares" {
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try shamir_Ristretto255.generate(&secret, 3, 2);
+    const generated = try shamir_ristretto255.generate(&secret, 3, 2);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 3);
@@ -206,7 +206,7 @@ test "ristretto255: can split secret into multiple shares" {
     const second_share = shares.items[1];
 
     var thresholds = [2]ShamirRistretto.Share{ first_share, second_share };
-    const reconstructed = try shamir_Ristretto255.reconstruct(&thresholds);
+    const reconstructed = try shamir_ristretto255.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
     try expect(isEqual);
@@ -218,7 +218,7 @@ test "ristretto255: can require all shares to reconstruct" {
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try shamir_Ristretto255.generate(&secret, 3, 2);
+    const generated = try shamir_ristretto255.generate(&secret, 3, 2);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 3);
@@ -228,7 +228,7 @@ test "ristretto255: can require all shares to reconstruct" {
     const third_share = shares.items[2];
 
     var thresholds = [_]ShamirRistretto.Share{ first_share, second_share, third_share };
-    const reconstructed = try shamir_Ristretto255.reconstruct(&thresholds);
+    const reconstructed = try shamir_ristretto255.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
     try expect(isEqual);
@@ -240,7 +240,7 @@ test "ristretto255: can combine using any combination of shares that meets the g
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try shamir_Ristretto255.generate(&secret, 5, 3);
+    const generated = try shamir_ristretto255.generate(&secret, 5, 3);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 5);
@@ -255,7 +255,7 @@ test "ristretto255: can combine using any combination of shares that meets the g
                     continue;
                 }
                 var thresholds = [3]ShamirRistretto.Share{ shares.items[i], shares.items[j], shares.items[k] };
-                const reconstructed = try shamir_Ristretto255.reconstruct(&thresholds);
+                const reconstructed = try shamir_ristretto255.reconstruct(&thresholds);
                 const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
                 try expect(isEqual);
             }
@@ -269,12 +269,12 @@ test "ristretto255: can split secret into 255 shares" {
     Keccak256.hash(word_secret, &secret, .{});
     secret = Ristretto255.scalar.reduce(secret);
 
-    const generated = try shamir_Ristretto255.generate(&secret, 255, 255);
+    const generated = try shamir_ristretto255.generate(&secret, 255, 255);
     defer generated.deinit();
     const shares = generated.shares;
     try expect(shares.items.len == 255);
 
-    const reconstructed = try shamir_Ristretto255.reconstruct(shares.items);
+    const reconstructed = try shamir_ristretto255.reconstruct(shares.items);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
     try expect(isEqual);

@@ -65,24 +65,6 @@ pub fn get_nonzero_rand_byte() u8 {
     }
 }
 
-/// Creates a pseudo-random set of coefficients for a polynomial.
-///
-/// Returned coefficients are always `degree + 1` in length since
-/// the given secret (intercept) is stored as the first value
-pub fn new_coefficients(intercept: u8, degree: u8, allocator: Allocator) !std.ArrayList(u8) {
-    var coefficients = std.ArrayList(u8).init(allocator);
-    // The first byte is always the intercept
-    try coefficients.append(intercept);
-    for (0..degree) |i| {
-        // degree is equal to t-1, where t is the threshold of required shares.
-        // The coefficient at t-1 cannot equal 0.
-        const coeff_idx = i + 1;
-        const byte = if (coeff_idx == degree) get_nonzero_rand_byte() else get_rand_byte();
-        try coefficients.append(byte);
-    }
-    return coefficients;
-}
-
 /// Creates a set of values from [1, 256).
 /// Returns a psuedo-random shuffling of the set.
 pub fn new_coordinates() [255]u8 {
@@ -138,75 +120,59 @@ fn gmult(a: u8, b: u8) u8 {
     return if (a == 0 or b == 0) 0 else result;
 }
 
-const InterpolationError = error{SampleLengthMismatch} || DivisionError;
+pub const Polynomial = struct {
+    coefficients: std.ArrayList(u8),
+    degree: u8,
 
-/// Takes N sample points and returns the value at a given x using a lagrange interpolation.
-///
-/// @see `Definition` section of https://en.wikipedia.org/wiki/Lagrange_polynomial to best
-/// understand the following code
-pub fn interpolate_polynomial(x_samples: []u8, y_samples: []u8, x: u8) InterpolationError!u8 {
-    if (x_samples.len != y_samples.len) {
-        return InterpolationError.SampleLengthMismatch;
+    const Self = @This();
+
+    /// Creates a pseudo-random set of coefficients for a polynomial.
+    ///
+    /// Returned coefficients are always `degree + 1` in length since
+    /// the given secret (intercept) is stored as the first value
+    pub fn init(intercept: u8, degree: u8, allocator: Allocator) !Self {
+        var coefficients = std.ArrayList(u8).init(allocator);
+        // The first byte is always the intercept
+        try coefficients.append(intercept);
+        for (0..degree) |i| {
+            // degree is equal to t-1, where t is the threshold of required shares.
+            // The coefficient at t-1 cannot equal 0.
+            const coeff_idx = i + 1;
+            const byte = if (coeff_idx == degree) get_nonzero_rand_byte() else get_rand_byte();
+            try coefficients.append(byte);
+        }
+        return Self{ .coefficients = coefficients, .degree = degree };
     }
 
-    const limit = x_samples.len;
+    const EvaluationError = error{InvalidZeroXValue};
 
-    var basis: u8 = 0;
-    var result: u8 = 0;
-
-    // Calculate basis polynomials for jth share
-    for (0..limit) |j| {
-        basis = 1;
-
-        for (0..limit) |k| {
-            // Basis polynomial is calculated
-            // with x-values of all other k-1 shares,
-            // hence we ignore our own x-value
-            if (j == k) {
-                continue;
+    /// Evaluates a polynomial with the given x using Horner's method.
+    /// @see https://en.wikipedia.org/wiki/Horner%27s_method
+    ///
+    /// This is used to evaluate the y-value for each share's randomly
+    /// assigned unique x-value given
+    fn evaluate(self: *const Self, x: u8) EvaluationError!u8 {
+        if (x == 0) {
+            return EvaluationError.InvalidZeroXValue;
+        }
+        // Initialise result with final coefficient
+        // and calculate backwards recursively
+        var result = self.coefficients.items[self.degree];
+        var i = self.degree - 1;
+        while (i >= 0) : (i -= 1) {
+            const coeff = self.coefficients.items[i];
+            result = gadd(gmult(result, x), coeff);
+            if (i == 0) {
+                break;
             }
-            // Corresponds to `x - x(k)` but addition
-            // and subtraction are equivalent in GF
-            const num = gadd(x, x_samples[k]);
-            // Corresponds to `x(j) - x(k)` but addition
-            // and subtraction are equivalent in GF
-            const denom = gadd(x_samples[j], x_samples[k]);
-
-            const term = try gdiv(num, denom);
-            basis = gmult(basis, term);
         }
-
-        const group = gmult(y_samples[j], basis);
-        result = gadd(result, group);
+        return result;
     }
 
-    return result;
-}
-
-const EvaluationError = error{InvalidZeroXValue};
-
-/// Evaluates a polynomial with the given x using Horner's method.
-/// @see https://en.wikipedia.org/wiki/Horner%27s_method
-///
-/// This is used to evaluate the y-value for each share's randomly
-/// assigned unique x-value given
-fn evaluate(coefficients: std.ArrayList(u8), x: u8, degree: u8) EvaluationError!u8 {
-    if (x == 0) {
-        return EvaluationError.InvalidZeroXValue;
+    pub fn deinit(self: *const Self) void {
+        self.coefficients.deinit();
     }
-    // Initialise result with final coefficient
-    // and calculate backwards recursively
-    var result = coefficients.items[degree];
-    var i = degree - 1;
-    while (i >= 0) : (i -= 1) {
-        const coeff = coefficients.items[i];
-        result = gadd(gmult(result, x), coeff);
-        if (i == 0) {
-            break;
-        }
-    }
-    return result;
-}
+};
 
 pub const Share = struct {
     x: u8,
@@ -218,6 +184,18 @@ pub const Share = struct {
     }
     fn deinit(self: *const Self) void {
         self.y.deinit();
+    }
+    pub fn toBytes(self: *const Self, allocator: Allocator) !std.ArrayList(u8) {
+        var bytes = std.ArrayList(u8).init(allocator);
+        try bytes.append(self.x);
+        try bytes.appendSlice(self.y.items);
+        return bytes;
+    }
+    pub fn fromBytes(bytes: []const u8, allocator: Allocator) !Self {
+        const x = bytes[0];
+        var y = std.ArrayList(u8).init(allocator);
+        try y.appendSlice(bytes[1..]);
+        return Self{ .x = x, .y = y };
     }
 };
 
@@ -242,7 +220,7 @@ pub const GeneratedShares = struct {
 ///
 /// @returns A list of `shares` shares.
 pub fn generate(
-    secret: []u8,
+    secret: []const u8,
     num_shares: u8,
     threshold: u8,
     allocator: Allocator,
@@ -279,13 +257,13 @@ pub fn generate(
     const degree = threshold - 1;
     for (0..secret_len) |i| {
         const secret_byte = secret[i];
-        const coeffs = try new_coefficients(secret_byte, degree, allocator);
+        const polynomial = try Polynomial.init(secret_byte, degree, allocator);
         for (0..num_shares) |k| {
             const x = x_coordinates[k];
-            const y = try evaluate(coeffs, x, degree);
+            const y = try polynomial.evaluate(x);
             try shares.items[k].y.append(y);
         }
-        coeffs.deinit();
+        polynomial.deinit();
     }
 
     return GeneratedShares{ .shares = shares };
@@ -359,130 +337,47 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !std.ArrayList(u8) {
     return secret;
 }
 
-test "can split secret into multiple shares" {
-    var secret = std.ArrayList(u8).init(std.testing.allocator);
-    defer secret.deinit();
-    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
-    assert(secret.items.len == 6);
+const InterpolationError = error{SampleLengthMismatch} || DivisionError;
 
-    const generated = try generate(secret.items, 3, 2, std.testing.allocator);
-    defer generated.deinit();
-    const shares = generated.shares;
-    assert(shares.items.len == 3);
+/// Takes N sample points and returns the value at a given x using a lagrange interpolation.
+///
+/// @see `Definition` section of https://en.wikipedia.org/wiki/Lagrange_polynomial to best
+/// understand the following code
+pub fn interpolate_polynomial(x_samples: []u8, y_samples: []u8, x: u8) InterpolationError!u8 {
+    if (x_samples.len != y_samples.len) {
+        return InterpolationError.SampleLengthMismatch;
+    }
 
-    const first_share = shares.items[0];
-    assert(first_share.y.items.len == secret.items.len);
-    const second_share = shares.items[1];
+    const limit = x_samples.len;
 
-    var thresholds = [2]Share{ first_share, second_share };
-    const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
-    defer reconstructed.deinit();
+    var basis: u8 = 0;
+    var result: u8 = 0;
 
-    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+    // Calculate basis polynomials for jth share
+    for (0..limit) |j| {
+        basis = 1;
 
-    std.debug.print("\nreconstructed (integers): ", .{});
-    try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = true }, std.io.getStdErr().writer());
-    std.debug.print("\nreconstructed (string): ", .{});
-    try std.json.stringify(&reconstructed.items, .{ .emit_strings_as_arrays = false }, std.io.getStdErr().writer());
-}
-
-test "can split a 1 byte secret" {
-    var secret = std.ArrayList(u8).init(std.testing.allocator);
-    defer secret.deinit();
-    try secret.appendSlice(&[_]u8{0x33});
-    assert(secret.items.len == 1);
-
-    const generated = try generate(secret.items, 3, 2, std.testing.allocator);
-    defer generated.deinit();
-    const shares = generated.shares;
-    assert(shares.items.len == 3);
-
-    const first_share = shares.items[0];
-    assert(first_share.y.items.len == secret.items.len);
-    const third_share = shares.items[2];
-
-    var thresholds = [2]Share{ first_share, third_share };
-    const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
-    defer reconstructed.deinit();
-
-    assert(std.mem.eql(u8, secret.items, reconstructed.items));
-}
-
-test "can require all shares to reconstruct" {
-    var secret = std.ArrayList(u8).init(std.testing.allocator);
-    defer secret.deinit();
-    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
-    assert(secret.items.len == 6);
-
-    const generated = try generate(secret.items, 3, 3, std.testing.allocator);
-    defer generated.deinit();
-    const shares = generated.shares;
-    assert(shares.items.len == 3);
-
-    const first_share = shares.items[0];
-    assert(first_share.y.items.len == secret.items.len);
-
-    const second_share = shares.items[1];
-    assert(second_share.y.items.len == secret.items.len);
-
-    const third_share = shares.items[2];
-    assert(third_share.y.items.len == secret.items.len);
-
-    var thresholds = [3]Share{ first_share, second_share, third_share };
-    const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
-    defer reconstructed.deinit();
-
-    assert(std.mem.eql(u8, secret.items, reconstructed.items));
-}
-
-test "can combine using any combination of shares that meets the given threshold" {
-    var secret = std.ArrayList(u8).init(std.testing.allocator);
-    defer secret.deinit();
-    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
-    assert(secret.items.len == 6);
-
-    const generated = try generate(secret.items, 5, 3, std.testing.allocator);
-    defer generated.deinit();
-    const shares = generated.shares;
-    assert(shares.items.len == 5);
-
-    for (shares.items, 0..) |s, i| {
-        assert(s.y.items.len == secret.items.len);
-
-        for (0..5) |j| {
-            if (j == i) {
+        for (0..limit) |k| {
+            // Basis polynomial is calculated
+            // with x-values of all other k-1 shares,
+            // hence we ignore our own x-value
+            if (j == k) {
                 continue;
             }
+            // Corresponds to `x - x(k)` but addition
+            // and subtraction are equivalent in GF
+            const num = gadd(x, x_samples[k]);
+            // Corresponds to `x(j) - x(k)` but addition
+            // and subtraction are equivalent in GF
+            const denom = gadd(x_samples[j], x_samples[k]);
 
-            for (0..5) |k| {
-                if (k == i or k == j) {
-                    continue;
-                }
-
-                var thresholds = [3]Share{ shares.items[i], shares.items[j], shares.items[k] };
-                const reconstructed = try reconstruct(&thresholds, std.testing.allocator);
-
-                assert(std.mem.eql(u8, secret.items, reconstructed.items));
-                reconstructed.deinit();
-            }
+            const term = try gdiv(num, denom);
+            basis = gmult(basis, term);
         }
+
+        const group = gmult(y_samples[j], basis);
+        result = gadd(result, group);
     }
-}
 
-test "can split secret into 255 shares" {
-    var secret = std.ArrayList(u8).init(std.testing.allocator);
-    defer secret.deinit();
-    try secret.appendSlice(&[_]u8{ 0x73, 0x65, 0x63, 0x72, 0x65, 0x74 });
-    assert(secret.items.len == 6);
-
-    const generated = try generate(secret.items, 255, 255, std.testing.allocator);
-    defer generated.deinit();
-    var shares = generated.shares;
-    assert(shares.items.len == 255);
-    const shares_arr = try shares.toOwnedSlice();
-
-    const reconstructed = try reconstruct(shares_arr, std.testing.allocator);
-    defer reconstructed.deinit();
-
-    assert(std.mem.eql(u8, secret.items, reconstructed.items));
+    return result;
 }

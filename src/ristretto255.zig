@@ -2,30 +2,67 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
-const CompressedScalar = Ristretto255.scalar.CompressedScalar;
+const scalar = Ristretto255.scalar;
+const CompressedScalar = scalar.CompressedScalar;
+const Scalar = scalar.Scalar;
 
 pub const one: CompressedScalar = [_]u8{0} ** 31 ++ [_]u8{1};
 
-fn new_coordinates() [255]CompressedScalar {
+fn new_coordinates(num_coords: u8) [255]CompressedScalar {
     var coordinates: [255]CompressedScalar = undefined;
-    for (0..255) |i| {
-        coordinates[i] = Ristretto255.scalar.random();
+    for (0..num_coords) |i| {
+        coordinates[i] = scalar.random();
     }
     return coordinates;
 }
 
-fn new_coefficients(intercept: CompressedScalar, degree: u8, allocator: Allocator) !std.ArrayList(CompressedScalar) {
-    var coefficients = std.ArrayList(CompressedScalar).init(allocator);
-    // The first byte is always the intercept
-    try coefficients.append(intercept);
-    // degree is equal to t-1, where t is the
-    // threshold of required shares.
-    for (0..degree) |_| {
-        const rand_scalar = Ristretto255.scalar.random();
-        try coefficients.append(rand_scalar);
+pub const Polynomial = struct {
+    coefficients: std.ArrayList(CompressedScalar),
+    degree: u8,
+
+    const Self = @This();
+    pub fn init(intercept: CompressedScalar, degree: u8, allocator: Allocator) !Self {
+        var coefficients = std.ArrayList(CompressedScalar).init(allocator);
+        // The first byte is always the intercept
+        try coefficients.append(intercept);
+        // degree is equal to t-1, where t is the
+        // threshold of required shares.
+        for (0..degree) |_| {
+            const rand_scalar = scalar.random();
+            try coefficients.append(rand_scalar);
+        }
+        return Self{ .coefficients = coefficients, .degree = degree };
     }
-    return coefficients;
-}
+
+    const EvaluationError = error{InvalidZeroXValue};
+
+    /// Evaluates a polynomial with the given x using Horner's method.
+    /// @see https://en.wikipedia.org/wiki/Horner%27s_method
+    ///
+    /// This is used to evaluate the y-value for each share's randomly
+    /// assigned unique x-value given
+    pub fn evaluate(self: *const Self, x: CompressedScalar) EvaluationError!CompressedScalar {
+        if (Scalar.fromBytes(x).isZero()) {
+            return EvaluationError.InvalidZeroXValue;
+        }
+        // Initialise result with final coefficient
+        // and calculate backwards recursively
+        var result = self.coefficients.items[self.degree];
+        var i = self.degree - 1;
+        while (i >= 0) : (i -= 1) {
+            const coeff = self.coefficients.items[i];
+            result = scalar.add(scalar.mul(result, x), coeff);
+            if (i == 0) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    pub fn deinit(self: *const Self) void {
+        self.coefficients.deinit();
+    }
+};
 
 pub const Share = struct {
     x: CompressedScalar,
@@ -44,12 +81,12 @@ pub const Share = struct {
 
 pub const GeneratedShares = struct {
     shares: std.ArrayList(Share),
-    coeffs: std.ArrayList(CompressedScalar),
+    polynomial: Polynomial,
 
     const Self = @This();
     pub fn deinit(self: *const Self) void {
-        self.coeffs.deinit();
         self.shares.deinit();
+        self.polynomial.deinit();
     }
 };
 
@@ -61,11 +98,13 @@ pub const GeneratedShares = struct {
 /// @param `allocator` Allocator to allocate arraylists on the heap
 ///
 /// @returns A list of `shares` shares.
-pub fn generate(secret_slice: []u8, num_shares: u8, threshold: u8, allocator: Allocator) !GeneratedShares {
-    const secret: CompressedScalar = secret_slice[0..32].*;
+pub fn generate(secret_slice: []const u8, num_shares: u8, threshold: u8, allocator: Allocator) !GeneratedShares {
+    assert(secret_slice.len == 32);
+    var secret: CompressedScalar = secret_slice[0..32].*;
+    secret = scalar.reduce(secret);
 
     // secret must be a non-empty
-    assert(!Ristretto255.scalar.Scalar.fromBytes(secret).isZero());
+    assert(!Scalar.fromBytes(secret).isZero());
     // num_shares must be a number in the range [2, 256)
     assert((num_shares >= 2) and (num_shares <= 255));
     // threshold must be a number in the range [2, 256)
@@ -74,7 +113,7 @@ pub fn generate(secret_slice: []u8, num_shares: u8, threshold: u8, allocator: Al
     assert(num_shares >= threshold);
 
     var shares = try std.ArrayList(Share).initCapacity(allocator, num_shares);
-    const x_coordinates = new_coordinates();
+    const x_coordinates = new_coordinates(num_shares);
 
     // Generate y-values with the following
     //
@@ -82,16 +121,16 @@ pub fn generate(secret_slice: []u8, num_shares: u8, threshold: u8, allocator: Al
     // 2. Calculate y-value of each share's x-value within generated curve
     // 3. Store y-value
     const degree = threshold - 1;
-    const coeffs = try new_coefficients(secret, degree, allocator);
+    const polynomial = try Polynomial.init(secret, degree, allocator);
 
     for (0..num_shares) |k| {
         const x = x_coordinates[k];
-        const y = try evaluate(coeffs, x, degree);
+        const y = try polynomial.evaluate(x);
         const share = Share{ .x = x, .y = y };
         try shares.append(share);
     }
 
-    return GeneratedShares{ .shares = shares, .coeffs = coeffs };
+    return GeneratedShares{ .shares = shares, .polynomial = polynomial };
 }
 
 const CombineError = error{InvalidDuplicateShareFound};
@@ -113,7 +152,7 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
     var y_samples = try std.ArrayList(CompressedScalar).initCapacity(allocator, num_shares); // const xSamples = new Uint8Array(sharesLength);
     defer y_samples.deinit();
     for (num_shares) |_| {
-        try y_samples.append(Ristretto255.scalar.zero);
+        try y_samples.append(scalar.zero);
     }
 
     for (0..num_shares) |i| {
@@ -123,7 +162,7 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
         // Filter for duplicate x-values, all
         // x-values are expected to be unique
         const is_duplicate = for (x_samples.items) |eid| {
-            if (Ristretto255.scalar.Scalar.isZero(Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(eid, share_id)))) {
+            if (Scalar.isZero(Scalar.fromBytes(scalar.sub(eid, share_id)))) {
                 break true;
             }
         } else false;
@@ -146,30 +185,6 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
     return secret;
 }
 
-const EvaluationError = error{InvalidZeroXValue};
-/// Evaluates a polynomial with the given x using Horner's method.
-/// @see https://en.wikipedia.org/wiki/Horner%27s_method
-///
-/// This is used to evaluate the y-value for each share's randomly
-/// assigned unique x-value given
-fn evaluate(coefficients: std.ArrayList(CompressedScalar), x: CompressedScalar, degree: u8) EvaluationError!CompressedScalar {
-    if (Ristretto255.scalar.Scalar.fromBytes(x).isZero()) {
-        return EvaluationError.InvalidZeroXValue;
-    }
-    // Initialise result with final coefficient
-    // and calculate backwards recursively
-    var result = coefficients.items[degree];
-    var i = degree - 1;
-    while (i >= 0) : (i -= 1) {
-        const coeff = coefficients.items[i];
-        result = Ristretto255.scalar.add(Ristretto255.scalar.mul(result, x), coeff);
-        if (i == 0) {
-            break;
-        }
-    }
-    return result;
-}
-
 const InterpolationError = error{SampleLengthMismatch};
 /// Takes N sample points and returns the value at a given x using a lagrange interpolation.
 ///
@@ -181,7 +196,7 @@ fn interpolate_polynomial(x_samples: []CompressedScalar, y_samples: []Compressed
     }
 
     const limit = x_samples.len;
-    var result: CompressedScalar = Ristretto255.scalar.zero;
+    var result: CompressedScalar = scalar.zero;
     // Calculate basis polynomials for jth share
     for (0..limit) |j| {
         var num = one;
@@ -195,17 +210,17 @@ fn interpolate_polynomial(x_samples: []CompressedScalar, y_samples: []Compressed
             }
             // Corresponds to `x - x(k)` but addition
             // and subtraction are equivalent in GF
-            num = Ristretto255.scalar.mul(num, x_samples[k]);
-            denom = Ristretto255.scalar.mul(denom, Ristretto255.scalar.sub(x_samples[k], x_samples[j]));
+            num = scalar.mul(num, x_samples[k]);
+            denom = scalar.mul(denom, scalar.sub(x_samples[k], x_samples[j]));
             // Corresponds to `x(j) - x(k)` but addition
             // and subtraction are equivalent in GF
         }
 
-        std.debug.assert(!Ristretto255.scalar.Scalar.fromBytes(denom).isZero());
+        std.debug.assert(!Scalar.fromBytes(denom).isZero());
 
-        const denom_expanded = Ristretto255.scalar.Scalar.fromBytes(denom);
-        const denom_inverted = Ristretto255.scalar.Scalar.invert(denom_expanded).toBytes();
-        result = Ristretto255.scalar.add(result, Ristretto255.scalar.mul(y_samples[j], Ristretto255.scalar.mul(num, denom_inverted)));
+        const denom_expanded = Scalar.fromBytes(denom);
+        const denom_inverted = Scalar.invert(denom_expanded).toBytes();
+        result = scalar.add(result, scalar.mul(y_samples[j], scalar.mul(num, denom_inverted)));
     }
 
     return result;
