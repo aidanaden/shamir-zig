@@ -5,6 +5,7 @@ const Ristretto255 = std.crypto.ecc.Ristretto255;
 const Shamir = @import("shamir.zig");
 const ShamirRistretto = Shamir.ShamirRistretto;
 const ShamirGF256 = Shamir.ShamirGF256;
+const FeldmanRistretto = @import("feldman.zig").Feldman;
 
 const yazap = @import("yazap");
 const log = std.log;
@@ -40,13 +41,19 @@ pub fn main() !void {
     try generate_cmd.addArg(Arg.singleValueOption("threshold", 't', "Minimum number of shares required to reconstruct the secret key"));
     try generate_cmd.addArg(Arg.singleValueOption("total", 'n', "Total number of shares to generate"));
     try generate_cmd.addArg(Arg.singleValueOption("secret", 's', "Secret key to generate shares for"));
+    try generate_cmd.addArg(Arg.singleValueOption("verifiable", 'v', "Whether to generate verifiable shares (commitments will be broadcasted for share verification)"));
 
     var reconstruct_cmd = app.createCommand("reconstruct", "Reconstruct a secret key given a number of shares (must meet the min. number of shares required to work)");
     try reconstruct_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are: '25519' and '256', standing for ED25519 and GF256 respectively."));
     try reconstruct_cmd.addArg(Arg.multiValuesOption("shares", 's', "Share values to reconstruct secret key", 255));
 
+    var verify_cmd = app.createCommand("verify", "Verify a given share using commitments that were generated along with the shares");
+    try verify_cmd.addArg(Arg.singleValueOption("share", 's', "Share to verify"));
+    try verify_cmd.addArg(Arg.multiValuesOption("commitments", 'c', "Commitment values used to verify the given share", 255));
+
     try cli.addSubcommand(generate_cmd);
     try cli.addSubcommand(reconstruct_cmd);
+    try cli.addSubcommand(verify_cmd);
 
     const matches = try app.parseProcess();
 
@@ -77,6 +84,8 @@ pub fn main() !void {
         const threshold = try std.fmt.parseInt(u8, gen_cmd_matches.getSingleValue("threshold").?, 10);
         const total = try std.fmt.parseInt(u8, gen_cmd_matches.getSingleValue("total").?, 10);
         const raw_secret = gen_cmd_matches.getSingleValue("secret").?;
+        const raw_verifiable = gen_cmd_matches.getSingleValue("verifiable");
+        const verifiable: bool = if (raw_verifiable == null) false else true;
 
         if (mode != 25519 and mode != 256) {
             try stdout.print("Invalid mode. Please select either '25519' or '256'.", .{});
@@ -85,8 +94,6 @@ pub fn main() !void {
         }
 
         if (mode == 25519) {
-            const shamir = Shamir.ShamirRistretto.init(allocator);
-
             var secret: [32]u8 = undefined;
             Keccak256.hash(raw_secret, &secret, .{});
             try stdout.print("hashed secret: ", .{});
@@ -97,17 +104,43 @@ pub fn main() !void {
 
             try stdout.print("hashed reduced secret: ", .{});
             try print_hex(&secret, stdout_any);
-            try stdout.print("\n", .{});
 
-            const generated = try shamir.generate(&secret, total, threshold);
-            const shares = generated.shares;
+            if (verifiable) {
+                const feldman = FeldmanRistretto.init(allocator);
+                const generated = try feldman.generate(&secret, total, threshold);
+                defer generated.deinit();
+                const shares = generated.shares;
 
-            for (shares.items, 0..) |share, i| {
-                if (i > 0) {
-                    try stdout.print("\n", .{});
+                try stdout.print("\nshares:\n", .{});
+                for (shares.items, 0..) |share, i| {
+                    if (i > 0) {
+                        try stdout.print("\n", .{});
+                    }
+                    const bytes = share.toBytes();
+                    try print_hex(&bytes, stdout_any);
                 }
-                const bytes = share.toBytes();
-                try print_hex(&bytes, stdout_any);
+
+                try stdout.print("\ncommitments:\n", .{});
+                for (generated.commitments.items, 0..) |coeff, i| {
+                    if (i > 0) {
+                        try stdout.print("\n", .{});
+                    }
+                    try print_hex(&coeff, stdout_any);
+                }
+            } else {
+                const shamir = ShamirRistretto.init(allocator);
+                const generated = try shamir.generate(&secret, total, threshold);
+                defer generated.deinit();
+                const shares = generated.shares;
+
+                try stdout.print("\nshares:\n", .{});
+                for (shares.items, 0..) |share, i| {
+                    if (i > 0) {
+                        try stdout.print("\n", .{});
+                    }
+                    const bytes = share.toBytes();
+                    try print_hex(&bytes, stdout_any);
+                }
             }
         }
 
@@ -119,6 +152,7 @@ pub fn main() !void {
             try stdout.print("\n", .{});
 
             const generated = try shamir.generate(raw_secret, total, threshold);
+            defer generated.deinit();
             const shares = generated.shares;
             for (shares.items, 0..) |share, i| {
                 if (i > 0) {
@@ -209,6 +243,51 @@ pub fn main() !void {
             }
         }
 
+        try bw.flush();
+    }
+
+    // `Verify` subcommand setup
+    if (matches.subcommandMatches("verify")) |verify_cmd_matches| {
+        if (verify_cmd_matches.getSingleValue("share") == null) {
+            try stdout.print("Please include your share", .{});
+            try bw.flush();
+            return;
+        }
+        if (verify_cmd_matches.getMultiValues("commitments") == null) {
+            try stdout.print("Please provide generated commitment values", .{});
+            try bw.flush();
+            return;
+        }
+
+        const raw_share = verify_cmd_matches.getSingleValue("share").?;
+
+        // Input is expected to be in 2-digit hex format
+        var buffer: [64]u8 = undefined;
+        var i: usize = 0;
+        while (i < raw_share.len) : (i += 2) {
+            const raw_hex = raw_share[i .. i + 2];
+            const hex = try std.fmt.parseInt(u8, raw_hex, 16);
+            buffer[i / 2] = hex;
+        }
+        const share = ShamirRistretto.Share.fromBytes(buffer);
+
+        const raw_commitments = verify_cmd_matches.getMultiValues("commitments").?;
+        var commitments = std.ArrayList([32]u8).init(allocator);
+        defer commitments.deinit();
+        for (raw_commitments) |raw_commitment| {
+            // Input is expected to be in 2-digit hex format
+            var commitment: [32]u8 = undefined;
+            var j: usize = 0;
+            while (j < raw_commitment.len) : (j += 2) {
+                const raw_hex = raw_commitment[j .. j + 2];
+                const hex = try std.fmt.parseInt(u8, raw_hex, 16);
+                commitment[j / 2] = hex;
+            }
+            try commitments.append(commitment);
+        }
+
+        const verified = try FeldmanRistretto.verify(commitments.items, &share);
+        try stdout.print("\nShare validity check: {any}", .{verified});
         try bw.flush();
     }
 }
