@@ -19,6 +19,7 @@ const Mode = enum {
     ShamirGF256,
     ShamirRistretto,
     FeldmanRistretto,
+    // PedersenRistretto,
 
     pub fn fromStr(raw_str: []const u8) ModeError!Mode {
         if (std.mem.eql(u8, raw_str, "s256")) {
@@ -27,6 +28,8 @@ const Mode = enum {
             return Mode.ShamirRistretto;
         } else if (std.mem.eql(u8, raw_str, "f25519")) {
             return Mode.FeldmanRistretto;
+            // } else if (std.mem.eql(u8, raw_str, "p25519")) {
+            //     return Mode.PedersenRistretto;
         } else {
             return ModeError.InvalidMode;
         }
@@ -187,6 +190,7 @@ pub fn main() !void {
             },
         }
 
+        try stdout.print("\n", .{});
         try bw.flush();
     }
 
@@ -287,6 +291,7 @@ pub fn main() !void {
             },
         }
 
+        try stdout.print("\n", .{});
         try bw.flush();
     }
 

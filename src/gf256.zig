@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-/// The Polynomial used is: x⁸ + x⁴ + x³ + x + 1
+/// The Polynomial used is: x⁸ + x⁴ + x³ + x + 1 (used to calculate divisions: A . B mod <Polynomial>)
 ///
 /// Lookup tables pulled from:
 ///
