@@ -1,7 +1,13 @@
 # .goreleaser.yml
+version: 2.0
+project_name: shamir
 builds:
   # The Zig executable name (specified in build.zig)
   - binary: shamir
+    # We should be able to use this, no go-dummy, but it seems broken right now
+    #builder: prebuilt
+    gobinary: ./.goreleaser/go-dummy
+    main: ./.goreleaser/dummy.go
     goos:
       - darwin
       - linux
@@ -9,6 +15,8 @@ builds:
     goarch:
       - amd64
       - arm64
+    goamd64:
+      - v1
     hooks:
       # This is called for every architecture.
       # eg: ./build.sh linux_amd64 csv2json
@@ -18,4 +26,14 @@ archives:
     # Additional static to bundle in the release.
     files:
       - README.md
-      - LICENSE
+      # - LICENSE
+# brews:
+#   - name: shamir
+#     homepage: https://github.com/aidanaden/shamir-zig
+#     description: |
+#       Shamir Secret Sharing CLI tool
+#     repository:
+#       owner: aidanaden
+#       name: homebrew-tools
+#     install: |-
+#       bin.install "shamir"
