@@ -27,13 +27,13 @@ archives:
     files:
       - README.md
       # - LICENSE
-# brews:
-#   - name: shamir
-#     homepage: https://github.com/aidanaden/shamir-zig
-#     description: |
-#       Shamir Secret Sharing CLI tool
-#     repository:
-#       owner: aidanaden
-#       name: homebrew-tools
-#     install: |-
-#       bin.install "shamir"
+brews:
+  - name: shamir
+    homepage: https://github.com/aidanaden/shamir-zig
+    description: |
+      Shamir Secret Sharing CLI tool
+    repository:
+      owner: aidanaden
+      name: homebrew-tools
+    install: |-
+      bin.install "shamir"
