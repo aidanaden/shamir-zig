@@ -1,0 +1,29 @@
+name: goreleaser
+on:
+  push:
+    tags:
+      - v*
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exit if not on main branch
+        if: endsWith(github.event.base_ref, 'main') == false
+        run: exit -1
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Set up zig 0.13.0
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+      # taken from https://github.com/goreleaser/goreleaser/blob/main/.github/workflows/release.yml
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v2
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
