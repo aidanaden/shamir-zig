@@ -67,4 +67,6 @@ set +x
 
 # Copy all results to goreleaser dist.
 mkdir -p "$my_go_dist"
+
+echo "copying ./zig-out/bin/* => ${my_go_dist}"
 cp -RPp ./zig-out/bin/* "$my_go_dist"
