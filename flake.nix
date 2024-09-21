@@ -22,7 +22,7 @@
           };
           build-zig = src: zigBuildZonLock: zenv.package {inherit src zigBuildZonLock;};
         in {
-          shamir = build-zig (pkgs.lib.cleanSource inputs.zfe) ./build.zig.zon2json-lock;
+          shamir = build-zig (pkgs.lib.cleanSource inputs.shamir) ./build.zig.zon2json-lock;
         };
       };
     };
