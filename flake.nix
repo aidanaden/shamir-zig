@@ -2,8 +2,8 @@
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOs/nixpkgs/nixos-unstable-small";
-    shamir.flake = false;
-    shamir.url = "github:aidanaden/shamir-zig";
+    # shamir.flake = false;
+    # shamir.url = "github:aidanaden/shamir-zig";
     zig2nix.inputs.nixpkgs.follows = "nixpkgs";
     zig2nix.url = "github:Cloudef/zig2nix";
   };
