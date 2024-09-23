@@ -34,7 +34,7 @@
             zigDisableWrap = true;
           }
           // optionalAttrs (!pathExists ./build.zig.zon) {
-            pname = "my-zig-project";
+            pname = "shamir";
             version = "0.0.0";
           }));
 
@@ -59,7 +59,12 @@
 
       # nix run .
       # apps.default = env.app [] "zig build run -- \"$@\"";
-      apps.default = apps.bundle.default;
+      apps.default = let
+        pkg = packages.target.${system-triple};
+      in {
+        type = "app";
+        program = "${pkg}/bin/shamir";
+      };
 
       # nix run .#build
       apps.build = env.app [] "zig build \"$@\"";
