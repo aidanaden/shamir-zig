@@ -1,5 +1,5 @@
 {
-  description = "Zig project flake";
+  description = "shamir-zig project flake";
 
   inputs = {
     zig2nix.url = "github:Cloudef/zig2nix";

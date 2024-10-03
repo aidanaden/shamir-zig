@@ -7,9 +7,10 @@ const Keccak256 = std.crypto.hash.sha3.Keccak256;
 
 const Shamir = @import("shamir.zig");
 const ShamirRistretto = Shamir.ShamirRistretto;
+const FeldmanRistretto = ShamirRistretto(1);
 
 pub const GeneratedShares = struct {
-    shares: std.ArrayList(ShamirRistretto.Share),
+    shares: std.ArrayList(FeldmanRistretto.Share),
     commitments: std.ArrayList(CompressedScalar),
 
     const Self = @This();
@@ -19,27 +20,35 @@ pub const GeneratedShares = struct {
     }
 };
 
+pub const Share = FeldmanRistretto.Share;
+
 pub const Feldman = struct {
-    shamir: ShamirRistretto,
+    shamir: FeldmanRistretto,
     allocator: Allocator,
 
     const Self = @This();
     pub fn init(allocator: Allocator) Self {
-        return Self{ .shamir = ShamirRistretto.init(allocator), .allocator = allocator };
+        return Self{ .shamir = FeldmanRistretto.init(allocator), .allocator = allocator };
     }
 
     pub fn generate(self: *const Self, secret: []const u8, num_shares: u8, threshold: u8) !GeneratedShares {
         const generated = try self.shamir.generate(secret, num_shares, threshold);
-        defer generated.polynomial.deinit();
+        defer {
+            for (generated.polynomials) |poly| {
+                poly.deinit();
+            }
+        }
+
+        std.debug.assert(generated.polynomials.len == 1);
         var commitments = std.ArrayList([32]u8).init(self.allocator);
-        for (generated.polynomial.coefficients.items) |coeff| {
+        for (generated.polynomials[0].coefficients.items) |coeff| {
             const commitment = try Ristretto255.basePoint.mul(coeff);
             try commitments.append(commitment.toBytes());
         }
         return GeneratedShares{ .shares = generated.shares, .commitments = commitments };
     }
 
-    pub fn verify(commitments: []CompressedScalar, share: *const ShamirRistretto.Share) !bool {
+    pub fn verify(commitments: []CompressedScalar, share: *const FeldmanRistretto.Share) !bool {
         var i: ?CompressedScalar = null;
         var rhs = try Ristretto255.fromBytes(commitments[0]);
         for (commitments, 0..) |commitment_bytes, j| {
@@ -55,11 +64,12 @@ pub const Feldman = struct {
             const c_i = try Ristretto255.mul(commitment, i.?);
             rhs = Ristretto255.add(rhs, c_i);
         }
-        const lhs = try Ristretto255.basePoint.mul(share.y);
+        const y = share.ys[0..32].*;
+        const lhs = try Ristretto255.basePoint.mul(y);
         return Ristretto255.equivalent(lhs, rhs);
     }
 
-    pub fn reconstruct(self: *const Self, shares: []ShamirRistretto.Share) !ShamirRistretto.Secret {
+    pub fn reconstruct(self: *const Self, shares: []FeldmanRistretto.Share) !FeldmanRistretto.Secret {
         return self.shamir.reconstruct(shares);
     }
 };
@@ -86,9 +96,10 @@ test "can split secret into multiple shares" {
     const first_share = shares.items[0];
     const second_share = shares.items[1];
 
-    var thresholds = [2]ShamirRistretto.Share{ first_share, second_share };
+    var thresholds = [2]FeldmanRistretto.Share{ first_share, second_share };
     const reconstructed = try feldman.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
+    std.debug.print("\nfeldman verification is equal: {}", .{isEqual});
     try expect(isEqual);
 }

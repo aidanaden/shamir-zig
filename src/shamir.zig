@@ -8,7 +8,7 @@ const CompressedScalar = Ristretto255.scalar.CompressedScalar;
 pub const gf256 = @import("gf256.zig");
 pub const ristretto255 = @import("ristretto255.zig");
 
-pub fn Shamir(comptime T: type) type {
+pub fn Shamir(comptime T: type, comptime num_ys: u8) type {
     return struct {
         const Self = @This();
 
@@ -25,20 +25,20 @@ pub fn Shamir(comptime T: type) type {
 
         pub const Share = switch (T) {
             u8 => gf256.Share,
-            CompressedScalar => ristretto255.Share,
+            CompressedScalar => ristretto255.Share(num_ys),
             else => unreachable,
         };
 
         pub const GeneratedShares = switch (T) {
             u8 => gf256.GeneratedShares,
-            CompressedScalar => ristretto255.GeneratedShares,
+            CompressedScalar => ristretto255.GeneratedShares(num_ys),
             else => unreachable,
         };
 
         pub fn generate(self: *const Self, secret: []const u8, num_shares: u8, threshold: u8) !GeneratedShares {
             const generated = switch (T) {
                 u8 => try gf256.generate(secret, num_shares, threshold, self.allocator),
-                CompressedScalar => try ristretto255.generate(secret, num_shares, threshold, self.allocator),
+                CompressedScalar => try ristretto255.generate(secret, num_shares, threshold, num_ys, self.allocator),
                 else => unreachable,
             };
             return generated;
@@ -47,7 +47,7 @@ pub fn Shamir(comptime T: type) type {
         pub fn reconstruct(self: *const Self, shares: []Share) !Secret {
             const secret = switch (T) {
                 u8 => try gf256.reconstruct(shares, self.allocator),
-                CompressedScalar => try ristretto255.reconstruct(shares, self.allocator),
+                CompressedScalar => try ristretto255.reconstruct(num_ys, shares, self.allocator),
                 else => unreachable,
             };
             return secret;
@@ -55,11 +55,13 @@ pub fn Shamir(comptime T: type) type {
     };
 }
 
-pub const ShamirRistretto = Shamir(CompressedScalar);
-pub const ShamirGF256 = Shamir(u8);
+pub fn ShamirRistretto(comptime num_ys: u8) type {
+    return Shamir(CompressedScalar, num_ys);
+}
+pub const ShamirGF256 = Shamir(u8, 1);
 
 const shamir_gf256 = ShamirGF256.init(std.testing.allocator);
-const shamir_ristretto255 = ShamirRistretto.init(std.testing.allocator);
+const shamir_ristretto255 = ShamirRistretto(1).init(std.testing.allocator);
 
 const expect = std.testing.expect;
 
@@ -205,7 +207,7 @@ test "ristretto255: can split secret into multiple shares" {
     const first_share = shares.items[0];
     const second_share = shares.items[1];
 
-    var thresholds = [2]ShamirRistretto.Share{ first_share, second_share };
+    var thresholds = [2]ShamirRistretto(1).Share{ first_share, second_share };
     const reconstructed = try shamir_ristretto255.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
@@ -227,7 +229,7 @@ test "ristretto255: can require all shares to reconstruct" {
     const second_share = shares.items[1];
     const third_share = shares.items[2];
 
-    var thresholds = [_]ShamirRistretto.Share{ first_share, second_share, third_share };
+    var thresholds = [_]ShamirRistretto(1).Share{ first_share, second_share, third_share };
     const reconstructed = try shamir_ristretto255.reconstruct(&thresholds);
 
     const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
@@ -254,7 +256,7 @@ test "ristretto255: can combine using any combination of shares that meets the g
                 if (k == i or k == j) {
                     continue;
                 }
-                var thresholds = [3]ShamirRistretto.Share{ shares.items[i], shares.items[j], shares.items[k] };
+                var thresholds = [3]ShamirRistretto(1).Share{ shares.items[i], shares.items[j], shares.items[k] };
                 const reconstructed = try shamir_ristretto255.reconstruct(&thresholds);
                 const isEqual = Ristretto255.scalar.Scalar.fromBytes(Ristretto255.scalar.sub(secret, reconstructed)).isZero();
                 try expect(isEqual);

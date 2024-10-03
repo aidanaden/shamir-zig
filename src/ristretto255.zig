@@ -64,41 +64,55 @@ pub const Polynomial = struct {
     }
 };
 
-pub const Share = struct {
-    x: CompressedScalar,
-    y: CompressedScalar,
+pub fn Share(comptime num_y: u8) type {
+    comptime assert(num_y > 0);
+    const yBytes = num_y * 32;
+    return struct {
+        x: CompressedScalar,
+        ys: [yBytes]u8,
 
-    const Self = @This();
-    pub fn toBytes(self: *const Self) [64]u8 {
-        return self.x ++ self.y;
-    }
-    pub fn fromBytes(bytes: [64]u8) Self {
-        const x = bytes[0..32].*;
-        const y = bytes[32..].*;
-        return Self{ .x = x, .y = y };
-    }
-};
+        const Self = @This();
+        const OutputBytes = 32 + yBytes;
+        pub fn toBytes(self: *const Self) [OutputBytes]u8 {
+            return @bitCast(self.x ++ self.ys);
+        }
+        pub fn fromBytes(bytes: []u8) Self {
+            assert(bytes.len == OutputBytes);
+            const x = bytes[0..32].*;
+            const ys: [yBytes]u8 = bytes[32..][0..yBytes].*;
+            return Self{ .x = x, .ys = ys };
+        }
+    };
+}
 
-pub const GeneratedShares = struct {
-    shares: std.ArrayList(Share),
-    polynomial: Polynomial,
+pub fn GeneratedShares(comptime num_y: u8) type {
+    comptime assert(num_y > 0);
+    return struct {
+        shares: std.ArrayList(Share(num_y)),
+        polynomials: [num_y]Polynomial,
 
-    const Self = @This();
-    pub fn deinit(self: *const Self) void {
-        self.shares.deinit();
-        self.polynomial.deinit();
-    }
-};
+        const Self = @This();
+        pub fn deinit(self: *const Self) void {
+            self.shares.deinit();
+            for (self.polynomials) |poly| {
+                poly.deinit();
+            }
+        }
+    };
+}
 
 /// Generate `shares` number of shares from given `secret` value, requiring `threshold` of them to reconstruct `secret`.
 ///
 /// @param `secret` The secret value to split into shares.
 /// @param `shares` The total number of shares to split `secret` into. Must be at least 2 and at most 255.
 /// @param `threshold` The minimum number of shares required to reconstruct `secret`. Must be at least 2 and at most 255.
+/// @param `num_ys` The minimum number of shares required to reconstruct `secret`. Must be at least 2 and at most 255.
 /// @param `allocator` Allocator to allocate arraylists on the heap
 ///
 /// @returns A list of `shares` shares.
-pub fn generate(secret_slice: []const u8, num_shares: u8, threshold: u8, allocator: Allocator) !GeneratedShares {
+pub fn generate(secret_slice: []const u8, num_shares: u8, threshold: u8, comptime num_ys: u8, allocator: Allocator) !GeneratedShares(num_ys) {
+    comptime assert(num_ys > 0);
+
     assert(secret_slice.len == 32);
     var secret: CompressedScalar = secret_slice[0..32].*;
     secret = scalar.reduce(secret);
@@ -112,7 +126,9 @@ pub fn generate(secret_slice: []const u8, num_shares: u8, threshold: u8, allocat
     // total number of shares must be greater than or equal to the required threshold
     assert(num_shares >= threshold);
 
-    var shares = try std.ArrayList(Share).initCapacity(allocator, num_shares);
+    const GeneratedShare = Share(num_ys);
+
+    var shares = try std.ArrayList(GeneratedShare).initCapacity(allocator, num_shares);
     const x_coordinates = new_coordinates(num_shares);
 
     // Generate y-values with the following
@@ -121,16 +137,37 @@ pub fn generate(secret_slice: []const u8, num_shares: u8, threshold: u8, allocat
     // 2. Calculate y-value of each share's x-value within generated curve
     // 3. Store y-value
     const degree = threshold - 1;
-    const polynomial = try Polynomial.init(secret, degree, allocator);
+
+    var polynomials: [num_ys]Polynomial = undefined;
+    for (0..num_ys) |i| {
+        const polynomial = try Polynomial.init(secret, degree, allocator);
+        polynomials[i] = polynomial;
+    }
 
     for (0..num_shares) |k| {
         const x = x_coordinates[k];
-        const y = try polynomial.evaluate(x);
-        const share = Share{ .x = x, .y = y };
+
+        const yBytes = comptime num_ys * 32;
+        var ys: [yBytes]u8 = undefined;
+
+        // `inline` is required to fix comptime type check.
+        //
+        // Without `inline`, compiler cannot determine how
+        // large `ys` is (it will assume `yBytes` = 32)
+        inline for (0..num_ys) |i| {
+            const poly_y = try polynomials[i].evaluate(x);
+            if (i == 0) {
+                std.mem.copyForwards(u8, &ys, &poly_y);
+            } else {
+                const ys_slice = ys[i * 32 ..];
+                std.mem.copyForwards(u8, ys_slice, &poly_y);
+            }
+        }
+        const share = GeneratedShare{ .x = x, .ys = ys };
         try shares.append(share);
     }
 
-    return GeneratedShares{ .shares = shares, .polynomial = polynomial };
+    return GeneratedShares(num_ys){ .shares = shares, .polynomials = polynomials };
 }
 
 const CombineError = error{InvalidDuplicateShareFound};
@@ -141,7 +178,7 @@ const CombineError = error{InvalidDuplicateShareFound};
 /// @param `allocator` Allocator to allocate arraylists on the heap
 ///
 /// @returns The reconstructed secret.
-pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
+pub fn reconstruct(comptime num_ys: u8, shares: []Share(num_ys), allocator: Allocator) !CompressedScalar {
     // Shares must be an array with length in the range [2, 255)
     assert((shares.len >= 2) and (shares.len <= 255));
 
@@ -159,8 +196,8 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
         const share = shares[i];
         const share_id = share.x;
 
-        // Filter for duplicate x-values, all
-        // x-values are expected to be unique
+        // Filter for duplicate x-values, all x-values are
+        // expected to be unique
         const is_duplicate = for (x_samples.items) |eid| {
             if (Scalar.isZero(Scalar.fromBytes(scalar.sub(eid, share_id)))) {
                 break true;
@@ -175,7 +212,8 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !CompressedScalar {
 
     // Set y-value for each share
     for (0..num_shares) |j| {
-        const y = shares[j].y;
+        // secret y-value is assumed to be the first value
+        const y: CompressedScalar = shares[j].ys[0..32].*;
         y_samples.items[j] = y;
     }
 
