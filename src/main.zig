@@ -279,7 +279,9 @@ pub fn main() !void {
                 try stdout.print("secret (text): {s}", .{secret.items});
             },
 
+            // ```
             // .shamir_ristretto, .feldman_ristretto => |shamir| {
+            // ```
             //
             // The above is NOT allowed since payloads are of different types.
             // @see https://ziglang.org/documentation/0.13.0/#switch
