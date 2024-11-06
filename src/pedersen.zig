@@ -37,10 +37,10 @@ pub const Pedersen = struct {
     pub fn generate(self: *const Self, secret: []const u8, num_shares: u8, threshold: u8) !GeneratedShares {
         const secret_shares = try self.shamir.generate(secret, num_shares, threshold);
         defer secret_shares.deinit();
-
-        var commitments = std.ArrayList([32]u8).init(self.allocator);
+        // Ensure polynomials have equal length coefficients
         assert(secret_shares.polynomials[0].coefficients.items.len == secret_shares.polynomials[1].coefficients.items.len);
 
+        var commitments = std.ArrayList([32]u8).init(self.allocator);
         const num_coeffs = secret_shares.polynomials[0].coefficients.items.len;
         for (0..num_coeffs) |i| {
             var commitment: ?Ristretto255 = null;
@@ -61,7 +61,6 @@ pub const Pedersen = struct {
 
         var shares = try std.ArrayList(PedersenRistretto.Share).initCapacity(self.allocator, num_shares);
         for (secret_shares.shares.items) |share| {
-            // const share = Share{ .shares = secret_share, .blinder_y = blinder_share.y };
             try shares.append(share);
         }
 
