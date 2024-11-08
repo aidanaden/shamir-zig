@@ -76,18 +76,18 @@ pub fn main() !void {
     var cli = app.rootCommand();
 
     var generate_cmd = app.createCommand("generate", "Generate shares given a secret key");
-    try generate_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are:\n\t- 's256': Shamir via GF256\n\t- 's25519': Shamir via Ed25519 (Ristretto255)\n\t- 'f25519': Feldman via Ed25519 (Ristretto255)"));
+    try generate_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are:\n\t- 's256': Shamir via GF256\n\t- 's25519': Shamir via Ed25519 (Ristretto255)\n\t- 'f25519': Feldman via Ed25519 (Ristretto255)\n\t- 'p25519': Pedersen via Ed25519 (Ristretto255)"));
 
     try generate_cmd.addArg(Arg.singleValueOption("threshold", 't', "Minimum number of shares required to reconstruct the secret key (default: 2)"));
     try generate_cmd.addArg(Arg.singleValueOption("total", 'n', "Total number of shares to generate (default: 3)"));
     try generate_cmd.addArg(Arg.singleValueOption("secret", 's', "Secret key to generate shares for"));
 
     var reconstruct_cmd = app.createCommand("reconstruct", "Reconstruct a secret key given a number of shares (must meet the min. number of shares required to work)");
-    try reconstruct_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are:\n\t- 's256': Shamir via GF256\n\t- 's25519': Shamir via Ed25519 (Ristretto255)\n\t- 'f25519': Feldman via Ed25519 (Ristretto255)"));
+    try reconstruct_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are:\n\t- 's256': Shamir via GF256\n\t- 's25519': Shamir via Ed25519 (Ristretto255)\n\t- 'f25519': Feldman via Ed25519 (Ristretto255)\n\t- 'p25519': Pedersen via Ed25519 (Ristretto255)"));
     try reconstruct_cmd.addArg(Arg.multiValuesOption("shares", 's', "Share values to reconstruct secret key", 255));
 
     var verify_cmd = app.createCommand("verify", "Verify a given share using commitments that were generated along with the shares (only supported in mode 'f25519')");
-    try verify_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are:\n\t- 's256': Shamir via GF256\n\t- 's25519': Shamir via Ed25519 (Ristretto255)\n\t- 'f25519': Feldman via Ed25519 (Ristretto255)"));
+    try verify_cmd.addArg(Arg.singleValueOption("mode", 'm', "Mode to use for share generator. Available modes are:\n\t- 's256': Shamir via GF256\n\t- 's25519': Shamir via Ed25519 (Ristretto255)\n\t- 'f25519': Feldman via Ed25519 (Ristretto255)\n\t- 'p25519': Pedersen via Ed25519 (Ristretto255)"));
     try verify_cmd.addArg(Arg.singleValueOption("share", 's', "Share to verify"));
     try verify_cmd.addArg(Arg.multiValuesOption("commitments", 'c', "Commitment values used to verify the given share", 255));
 
@@ -112,7 +112,7 @@ pub fn main() !void {
         const raw_mode = gen_cmd_matches.getSingleValue("mode") orelse "s256";
         const mode = Mode.fromStr(raw_mode) catch |err| {
             const err_text = switch (err) {
-                ModeError.InvalidMode => "Invalid mode. Please select 's256', 's25519' or 'f25519'.",
+                ModeError.InvalidMode => "Invalid mode. Please select 's256', 's25519', 'f25519' or 'p25519'.",
             };
             try stdout.print(err_text, .{});
             try bw.flush();
@@ -245,7 +245,7 @@ pub fn main() !void {
         const raw_mode = gen_cmd_matches.getSingleValue("mode") orelse "s256";
         const mode = Mode.fromStr(raw_mode) catch |err| {
             const err_text = switch (err) {
-                ModeError.InvalidMode => "Invalid mode. Please select 's256', 's25519' or 'f25519'.",
+                ModeError.InvalidMode => "Invalid mode. Please select 's256', 's25519', 'f25519' or 'p25519'.",
             };
             try stdout.print(err_text, .{});
             try bw.flush();
@@ -376,7 +376,7 @@ pub fn main() !void {
         const raw_mode = verify_cmd_matches.getSingleValue("mode") orelse "s256";
         const mode = Mode.fromStr(raw_mode) catch |err| {
             const err_text = switch (err) {
-                ModeError.InvalidMode => "Invalid mode. Please select 's256', 's25519' or 'f25519'.",
+                ModeError.InvalidMode => "Invalid mode. Please select 's256', 's25519', 'f25519' or 'p25519'.",
             };
             try stdout.print(err_text, .{});
             try bw.flush();
