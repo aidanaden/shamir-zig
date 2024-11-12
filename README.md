@@ -49,6 +49,8 @@ brew install aidanaden/tools/shamir
 
 We can `generate` shares from a given secret and later `reconstruct` the secret from the minimum number of shares (as configured when running `generate`).
 
+Note: for algorithms using Ed25519, the secret is hashed via Sha512 and reduced into a value within the Ed25519 curve (32-bytes). Reduction is required since the secret can only be reconstructed as a value within the Ed25519 curve.
+
 ### CLI
 
 #### Shamir GF256
@@ -82,7 +84,7 @@ We can `generate` shares from a given secret and later `reconstruct` the secret 
 #### Shamir Ed25519 via Ristretto255
 
 ```sh
-./zig-out/bin/shamir generate --threshold 4 --total 10 --secret mynamejeff -m s25519--- output ---
+./zig-out/bin/shamir generate --threshold 4 --total 10 --secret mynamejeff -m s25519
 # --- output ---
 #
 # secret (hashed): 6D33F29E352F4A76FB61C06E6AC84163760FE73CBDEEA718B366DB62EB0EAAA9
