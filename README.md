@@ -49,7 +49,7 @@ brew install aidanaden/tools/shamir
 
 We can `generate` shares from a given secret and later `reconstruct` the secret from the minimum number of shares (as configured when running `generate`).
 
-Note: for algorithms using Ed25519, the secret is hashed via Sha512 and reduced into a value within the Ed25519 curve (32-bytes). Reduction is required since the secret can only be reconstructed as a value within the Ed25519 curve.
+Note: for algorithms using Ed25519, the secret is hashed via Sha512 and reduced into a value (32-bytes) within the Ed25519 curve. Reduction is required since the secret can only be reconstructed as a value within the Ed25519 curve.
 
 ### CLI
 
