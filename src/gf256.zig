@@ -289,7 +289,7 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !std.ArrayList(u8) {
     const num_shares = shares.len;
     const secret_len = shares[0].y.items.len;
     var secret = std.ArrayList(u8).init(allocator);
-    for (secret_len) |_| {
+    for (0..secret_len) |_| {
         try secret.append(0);
     }
 
@@ -297,7 +297,7 @@ pub fn reconstruct(shares: []Share, allocator: Allocator) !std.ArrayList(u8) {
     defer x_samples.deinit();
     var y_samples = std.ArrayList(u8).init(allocator); // const xSamples = new Uint8Array(sharesLength);
     defer y_samples.deinit();
-    for (num_shares) |_| {
+    for (0..num_shares) |_| {
         try y_samples.append(0);
     }
 

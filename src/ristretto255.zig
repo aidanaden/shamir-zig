@@ -188,7 +188,7 @@ pub fn reconstruct(comptime num_ys: u8, shares: []Share(num_ys), allocator: Allo
     defer x_samples.deinit();
     var y_samples = try std.ArrayList(CompressedScalar).initCapacity(allocator, num_shares); // const xSamples = new Uint8Array(sharesLength);
     defer y_samples.deinit();
-    for (num_shares) |_| {
+    for (0..num_shares) |_| {
         try y_samples.append(scalar.zero);
     }
 
